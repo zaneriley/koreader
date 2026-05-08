@@ -29,6 +29,7 @@ local BUILTIN_PLUGINS = {
     ["autoturn"] = true,
     ["autowarmth"] = true,
     ["batterystat"] = true,
+    ["bookshelf"] = true,
     ["bookshortcuts"] = true,
     ["calibre"] = true,
     ["cloudstorage"] = true,

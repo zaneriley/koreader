@@ -838,7 +838,9 @@ end
 
 function ReaderUI:saveSettings()
     self:handleEvent(Event:new("SaveSettings"))
-    DocSettings.saveSettingsArcFile(self.doc_settings, nil, true)
+    if DocSettings.saveSettingsArcFile then
+        DocSettings.saveSettingsArcFile(self.doc_settings, nil, true)
+    end
     self.doc_settings:flush()
     G_reader_settings:flush()
 end
@@ -921,10 +923,18 @@ function ReaderUI:dealWithLoadDocumentFailure()
     error("crengine failed recognizing or parsing this file: unsupported or invalid document")
 end
 
+function ReaderUI:onShowFileManager()
+    local file = self.document.file
+    self:onClose()
+    self:showFileManager(file)
+    return true
+end
+
 function ReaderUI:onHome()
     local file = self.document.file
     self:onClose()
     self:showFileManager(file)
+    UIManager:sendEvent(Event:new("ShowHome"))
     return true
 end
 

@@ -184,6 +184,7 @@ if fontmap ~= nil then
     end
 end
 
+local Event = require("ui/event")
 local UIManager = require("ui/uimanager")
 
 -- Apply developer patches
@@ -212,7 +213,6 @@ if G_reader_settings:isTrue("color_rendering") and not Device:hasColorScreen() t
         end,
         ok_text = _("Disable"),
         ok_callback = function()
-            local Event = require("ui/event")
             G_reader_settings:delSetting("color_rendering")
             CanvasContext:setColorRenderingEnabled(false)
             UIManager:broadcastEvent(Event:new("ColorRenderingUpdate"))
@@ -252,7 +252,7 @@ elseif directory then
 else
     -- Get which file to start with
     local last_file = G_reader_settings:readSetting("lastfile")
-    local start_with = G_reader_settings:readSetting("start_with") or "filemanager"
+    local start_with = G_reader_settings:readSetting("start_with") or "library"
 
     local QuickStart = require("ui/quickstart")
     if not QuickStart:isShown() then
@@ -291,7 +291,9 @@ else
         FileManager:showFiles(home_dir)
         -- Always open FM modules on top of filemanager, so closing 'em doesn't result in an exit
         -- because of an empty widget stack, and so they can interact with the FM instance as expected.
-        if start_with == "history" then
+        if start_with == "library" then
+            UIManager:sendEvent(Event:new("ShowLibrary"))
+        elseif start_with == "history" then
             FileManager.instance.history:onShowHist()
         elseif start_with == "favorites" then
             FileManager.instance.collections:onShowColl()

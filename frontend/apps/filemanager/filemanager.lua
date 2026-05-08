@@ -448,6 +448,10 @@ function FileManager:init()
 end
 
 function FileChooser:onBack()
+    if self.ui and self.ui.return_to_previous_view then
+        return self.ui:onClose()
+    end
+
     local back_to_exit = G_reader_settings:readSetting("back_to_exit", "prompt")
     local back_in_filemanager = G_reader_settings:readSetting("back_in_filemanager", "default")
     if back_in_filemanager == "default" then
@@ -866,6 +870,10 @@ function FileManager:onHome()
     if not self.file_chooser:goHome() then
         self:setHome()
     end
+    return true
+end
+
+function FileManager:onShowFileManager()
     return true
 end
 

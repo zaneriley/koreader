@@ -170,6 +170,8 @@ local order = {
         "wikipedia_settings",
     },
     main = {
+        "bookshelf", -- if enabled (Plugin)
+        "----------------------------",
         "history",
         "open_last_document",
         "----------------------------",

@@ -22,6 +22,8 @@ lua-*
 *.o
 tags
 test/*
+.tmp/
+__pycache__/
 *.tar
 *.log
 *.sdr/
