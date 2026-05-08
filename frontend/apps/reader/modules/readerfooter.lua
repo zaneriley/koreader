@@ -30,6 +30,7 @@ local util = require("util")
 local T = require("ffi/util").template
 local _ = require("gettext")
 local C_ = _.pgettext
+local N_ = _.ngettext
 local Screen = Device.screen
 
 local MODE = {
@@ -55,6 +56,56 @@ local MODE = {
     page_turning_inverted = 19, -- includes both page-turn-button and swipe-and-tap inversion
     dynamic_filler = 20,
     additional_content = 21,
+}
+
+local FOOTER_LAYOUT_INLINE = "inline"
+local FOOTER_LAYOUT_THREE_ZONE = "three_zone"
+
+local THREE_ZONE_FOOTER_STATES = {
+    "pages_left",
+    "time_left",
+    "screen_pages",
+    "print_pages",
+    "toc_label",
+    "empty_center",
+}
+
+local THREE_ZONE_BIDI_ISOLATES = {
+    [string.char(0xE2, 0x81, 0xA6)] = true, -- LRI
+    [string.char(0xE2, 0x81, 0xA7)] = true, -- RLI
+    [string.char(0xE2, 0x81, 0xA8)] = true, -- FSI
+    [string.char(0xE2, 0x81, 0xA9)] = true, -- PDI
+}
+
+local THREE_ZONE_CJK_NUMBERS = {
+    ["0"] = true, ["1"] = true, ["2"] = true, ["3"] = true, ["4"] = true,
+    ["5"] = true, ["6"] = true, ["7"] = true, ["8"] = true, ["9"] = true,
+    ["０"] = true, ["１"] = true, ["２"] = true, ["３"] = true, ["４"] = true,
+    ["５"] = true, ["６"] = true, ["７"] = true, ["８"] = true, ["９"] = true,
+    ["〇"] = true, ["零"] = true, ["一"] = true, ["二"] = true, ["三"] = true,
+    ["四"] = true, ["五"] = true, ["六"] = true, ["七"] = true, ["八"] = true,
+    ["九"] = true, ["十"] = true, ["百"] = true, ["千"] = true, ["万"] = true,
+    ["壱"] = true, ["弐"] = true, ["参"] = true,
+}
+
+local THREE_ZONE_CJK_UNITS = {
+    ["章"] = true, ["節"] = true, ["节"] = true, ["回"] = true,
+    ["話"] = true, ["话"] = true, ["部"] = true, ["編"] = true,
+    ["编"] = true, ["篇"] = true,
+}
+
+local THREE_ZONE_KOREAN_NUMBERS = {
+    ["0"] = true, ["1"] = true, ["2"] = true, ["3"] = true, ["4"] = true,
+    ["5"] = true, ["6"] = true, ["7"] = true, ["8"] = true, ["9"] = true,
+    ["０"] = true, ["１"] = true, ["２"] = true, ["３"] = true, ["４"] = true,
+    ["５"] = true, ["６"] = true, ["７"] = true, ["８"] = true, ["９"] = true,
+    ["일"] = true, ["이"] = true, ["삼"] = true, ["사"] = true, ["오"] = true,
+    ["육"] = true, ["칠"] = true, ["팔"] = true, ["구"] = true, ["십"] = true,
+    ["백"] = true, ["천"] = true, ["만"] = true,
+}
+
+local THREE_ZONE_KOREAN_UNITS = {
+    ["장"] = true, ["절"] = true, ["화"] = true, ["부"] = true, ["편"] = true,
 }
 
 local symbol_prefix = {
@@ -136,6 +187,41 @@ if BD.mirroredUILayout() then
     for k, v in pairs(symbol_prefix.icons) do
         symbol_prefix.icons[k] = BD.wrap(v)
     end
+end
+
+local ThreeZoneFooterContainer = WidgetContainer:extend{
+    dimen = nil,
+}
+
+function ThreeZoneFooterContainer:paintTo(bb, x, y)
+    local start_widget = self[1]
+    local center_widget = self[2]
+    local end_widget = self[3]
+    if not start_widget or not center_widget or not end_widget then
+        return
+    end
+
+    local width = self.dimen.w
+    local start_size = start_widget:getSize()
+    local center_size = center_widget:getSize()
+    local end_size = end_widget:getSize()
+    local center_x = x + math.floor((width - center_size.w) / 2)
+    local start_x, end_x
+    if BD.mirroredUILayout() then
+        start_x = x + width - start_size.w
+        end_x = x
+    else
+        start_x = x
+        end_x = x + width - end_size.w
+    end
+
+    local function centered_y(widget_size)
+        return y + math.floor((self.dimen.h - widget_size.h) / 2)
+    end
+
+    start_widget:paintTo(bb, start_x, centered_y(start_size))
+    center_widget:paintTo(bb, center_x, centered_y(center_size))
+    end_widget:paintTo(bb, end_x, centered_y(end_size))
 end
 
 -- functions that generates footer text for each mode
@@ -492,6 +578,37 @@ local ReaderFooter = WidgetContainer:extend{
     textGeneratorMap = footerTextGeneratorMap,
 }
 
+function ReaderFooter:isThreeZoneLayout()
+    return self.settings.footer_layout == FOOTER_LAYOUT_THREE_ZONE
+end
+
+function ReaderFooter:isThreeZoneFooterState(state)
+    for _, footer_state in ipairs(THREE_ZONE_FOOTER_STATES) do
+        if footer_state == state then
+            return true
+        end
+    end
+    return false
+end
+
+function ReaderFooter:normalizeFooterSettings()
+    if self.settings.footer_layout ~= FOOTER_LAYOUT_THREE_ZONE then
+        self.settings.footer_layout = FOOTER_LAYOUT_INLINE
+    end
+    if not self:isThreeZoneFooterState(self.settings.three_zone_footer_state) then
+        self.settings.three_zone_footer_state = self.default_settings.three_zone_footer_state
+    end
+    if self.settings.three_zone_text_font_size == nil then
+        self.settings.three_zone_text_font_size = self.default_settings.three_zone_text_font_size
+    end
+    if self.settings.three_zone_text_font_bold == nil then
+        self.settings.three_zone_text_font_bold = self.default_settings.three_zone_text_font_bold
+    end
+    if self.settings.three_zone_min_gap == nil then
+        self.settings.three_zone_min_gap = self.default_settings.three_zone_min_gap
+    end
+end
+
 -- NOTE: This is used in a migration script by ui/data/onetime_migration,
 --       which is why it's public.
 ReaderFooter.default_settings = {
@@ -534,6 +651,11 @@ ReaderFooter.default_settings = {
     book_chapter_max_width_pct = 30,
     skim_widget_on_hold = false,
     progress_style_thin = false,
+    footer_layout = FOOTER_LAYOUT_INLINE,
+    three_zone_footer_state = "pages_left",
+    three_zone_text_font_size = 11, -- unscaled_size_check: ignore
+    three_zone_text_font_bold = true,
+    three_zone_min_gap = 32, -- unscaled_size_check: ignore
     progress_bar_position = "alongside",
     bottom_horizontal_separator = false,
     align = "center",
@@ -551,6 +673,7 @@ ReaderFooter.default_settings = {
 
 function ReaderFooter:init()
     self.settings = G_reader_settings:readSetting("footer", self.default_settings)
+    self:normalizeFooterSettings()
 
     self.additional_footer_content = {} -- array, where additional header content can be inserted.
 
@@ -594,10 +717,26 @@ function ReaderFooter:init()
         self.settings.text_font_face = self.default_settings.text_font_face
     end
     self.footer_text_face = Font:getFace(self.settings.text_font_face, self.settings.text_font_size)
+    self.three_zone_text_face = Font:getFace(self.settings.text_font_face, self.settings.three_zone_text_font_size)
     self.footer_text = TextWidget:new{
         text = "",
         face = self.footer_text_face,
         bold = self.settings.text_font_bold,
+    }
+    self.three_zone_start_text = TextWidget:new{
+        text = "",
+        face = self.three_zone_text_face,
+        bold = self.settings.three_zone_text_font_bold,
+    }
+    self.three_zone_center_text = TextWidget:new{
+        text = "",
+        face = self.three_zone_text_face,
+        bold = self.settings.three_zone_text_font_bold,
+    }
+    self.three_zone_end_text = TextWidget:new{
+        text = "",
+        face = self.three_zone_text_face,
+        bold = self.settings.three_zone_text_font_bold,
     }
     -- all width related values will be initialized in self:resetLayout()
     self.text_width = 0
@@ -786,7 +925,19 @@ function ReaderFooter:updateFooterContainer()
         table.insert(self.vertical_frame, self.separator_line)
         table.insert(self.vertical_frame, vertical_span)
     end
-    if self.settings.progress_bar_position ~= "alongside" and not self.settings.disable_progress_bar then
+    if self:isThreeZoneLayout() then
+        self.three_zone_container = ThreeZoneFooterContainer:new{
+            dimen = Geom:new{ w = 0, h = self.height },
+            self.three_zone_start_text,
+            self.three_zone_center_text,
+            self.three_zone_end_text,
+        }
+        self.horizontal_group = HorizontalGroup:new{
+            margin_span,
+            self.three_zone_container,
+            margin_span,
+        }
+    elseif self.settings.progress_bar_position ~= "alongside" and not self.settings.disable_progress_bar then
         self.horizontal_group = HorizontalGroup:new{
             margin_span,
             self.text_container,
@@ -801,7 +952,7 @@ function ReaderFooter:updateFooterContainer()
         }
     end
 
-    if self.settings.align == "left" then
+    if self:isThreeZoneLayout() or self.settings.align == "left" then
         self.footer_container = LeftContainer:new{
             dimen = Geom:new{ w = 0, h = self.height },
             self.horizontal_group
@@ -820,7 +971,9 @@ function ReaderFooter:updateFooterContainer()
 
     local vertical_span = VerticalSpan:new{width = Size.span.vertical_default}
 
-    if self.settings.progress_bar_position == "above" and not self.settings.disable_progress_bar then
+    if self:isThreeZoneLayout() then
+        table.insert(self.vertical_frame, self.footer_container)
+    elseif self.settings.progress_bar_position == "above" and not self.settings.disable_progress_bar then
         table.insert(self.vertical_frame, self.progress_bar)
         table.insert(self.vertical_frame, vertical_span)
         table.insert(self.vertical_frame, self.footer_container)
@@ -950,6 +1103,37 @@ function ReaderFooter:setupTouchZones()
     })
 end
 
+function ReaderFooter:updateThreeZoneLayout()
+    if not self.three_zone_container then
+        return
+    end
+    local screen_width = self._saved_screen_width or Screen:getWidth()
+    local available_width = math.max(0, screen_width - 2 * self.horizontal_margin)
+    self.three_zone_container.dimen.w = available_width
+    self.three_zone_container.dimen.h = self.height
+
+    self.three_zone_start_text:setMaxWidth(nil)
+    self.three_zone_center_text:setMaxWidth(nil)
+    self.three_zone_end_text:setMaxWidth(nil)
+
+    local gap = Screen:scaleBySize(self.settings.three_zone_min_gap)
+    local end_width = self.three_zone_end_text:getSize().w
+    local center_max_width = math.max(0, available_width - 2 * (end_width + gap))
+    self.three_zone_center_text:setMaxWidth(center_max_width)
+    local center_width = self.three_zone_center_text:getSize().w
+    local center_x = math.floor((available_width - center_width) / 2)
+    local leading_width = math.max(0, center_x - gap)
+    local trailing_width = math.max(0, available_width - center_x - center_width - gap)
+
+    if BD.mirroredUILayout() then
+        self.three_zone_start_text:setMaxWidth(trailing_width)
+        self.three_zone_end_text:setMaxWidth(leading_width)
+    else
+        self.three_zone_start_text:setMaxWidth(leading_width)
+        self.three_zone_end_text:setMaxWidth(trailing_width)
+    end
+end
+
 -- call this method whenever the screen size changes
 function ReaderFooter:resetLayout(force_reset)
     local new_screen_width = Screen:getWidth()
@@ -957,7 +1141,9 @@ function ReaderFooter:resetLayout(force_reset)
     if new_screen_width == self._saved_screen_width
         and new_screen_height == self._saved_screen_height and not force_reset then return end
 
-    if self.settings.disable_progress_bar then
+    if self:isThreeZoneLayout() then
+        self.progress_bar.width = 0
+    elseif self.settings.disable_progress_bar then
         self.progress_bar.width = 0
     elseif self.settings.progress_bar_position ~= "alongside" then
         self.progress_bar.width = math.floor(new_screen_width -
@@ -969,7 +1155,7 @@ function ReaderFooter:resetLayout(force_reset)
     if self.separator_line then
         self.separator_line.dimen.w = new_screen_width - 2 * self.horizontal_margin
     end
-    if self.settings.disable_progress_bar then
+    if self:isThreeZoneLayout() or self.settings.disable_progress_bar then
         self.progress_bar.height = 0
     else
         local bar_height
@@ -981,14 +1167,16 @@ function ReaderFooter:resetLayout(force_reset)
         self.progress_bar:setHeight(bar_height)
     end
 
+    self._saved_screen_width = new_screen_width
+    self._saved_screen_height = new_screen_height
+    if self:isThreeZoneLayout() then
+        self:updateThreeZoneLayout()
+    end
     self.horizontal_group:resetLayout()
     self.footer_positioner.dimen.w = new_screen_width
     self.footer_positioner.dimen.h = new_screen_height
     self.footer_container.dimen.w = new_screen_width
     self.dimen = self.footer_positioner:getSize()
-
-    self._saved_screen_width = new_screen_width
-    self._saved_screen_height = new_screen_height
 end
 
 function ReaderFooter:getHeight()
@@ -1482,8 +1670,17 @@ function ReaderFooter:addToMainMenu(menu_items)
         separator = true,
         sub_item_table = {
             {
-                text = _("Arrange items in status bar"),
+                text_func = function()
+                    return T(_("Layout: %1"), self:genFooterLayoutMenuItems())
+                end,
                 separator = true,
+                sub_item_table = {
+                    self:genFooterLayoutMenuItems(FOOTER_LAYOUT_INLINE),
+                    self:genFooterLayoutMenuItems(FOOTER_LAYOUT_THREE_ZONE),
+                },
+            },
+            {
+                text = _("Arrange items in status bar"),
                 keep_menu_open = true,
                 enabled_func = function()
                     local enabled_count = 0
@@ -1830,6 +2027,28 @@ end
 
 -- settings menu item generators
 
+function ReaderFooter:genFooterLayoutMenuItems(value)
+    local strings = {
+        [FOOTER_LAYOUT_INLINE] = _("Inline"),
+        [FOOTER_LAYOUT_THREE_ZONE] = _("Three-zone"),
+    }
+    if value == nil then
+        return strings[self.settings.footer_layout]:lower()
+    end
+    return {
+        text = strings[value],
+        checked_func = function()
+            return self.settings.footer_layout == value
+        end,
+        radio = true,
+        callback = function()
+            self.settings.footer_layout = value
+            G_reader_settings:saveSetting("footer", self.settings)
+            self:refreshFooter(true, true)
+        end,
+    }
+end
+
 function ReaderFooter:genProgressBarPositionMenuItems(value)
     local strings = {
         above     = _("Above items"),
@@ -2035,11 +2254,14 @@ function ReaderFooter:loadPreset(preset)
     local old_text_font_size = self.settings.text_font_size
     local old_text_font_face = self.settings.text_font_face
     local old_text_font_bold = self.settings.text_font_bold
+    local old_three_zone_text_font_size = self.settings.three_zone_text_font_size
+    local old_three_zone_text_font_bold = self.settings.three_zone_text_font_bold
     G_reader_settings:saveSetting("footer", util.tableDeepCopy(preset.footer))
     G_reader_settings:saveSetting("reader_footer_mode", preset.reader_footer_mode)
     G_reader_settings:saveSetting("reader_footer_custom_text", preset.reader_footer_custom_text)
     G_reader_settings:saveSetting("reader_footer_custom_text_repetitions", preset.reader_footer_custom_text_repetitions)
     self.settings = G_reader_settings:readSetting("footer")
+    self:normalizeFooterSettings()
     self:set_mode_index()
     self:set_has_no_mode()
     self.custom_text = preset.reader_footer_custom_text
@@ -2052,12 +2274,15 @@ function ReaderFooter:loadPreset(preset)
     self:applyFooterMode(preset.reader_footer_mode)
     self:updateFooterTextGenerator()
     if old_text_font_size ~= self.settings.text_font_size or old_text_font_face ~= self.settings.text_font_face
-            or old_text_font_bold ~= self.settings.text_font_bold then
+            or old_text_font_bold ~= self.settings.text_font_bold
+            or old_three_zone_text_font_size ~= self.settings.three_zone_text_font_size
+            or old_three_zone_text_font_bold ~= self.settings.three_zone_text_font_bold then
         self:updateFooterFont()
     else
         self.separator_width = nil
         self.filler_space_width = nil
     end
+    self:updateFooterContainer()
     self:setTocMarkers()
     self:refreshFooter(true, true)
 end
@@ -2116,6 +2341,180 @@ function ReaderFooter:getFittedText(text, max_width_pct)
     return BD.auto(fitted_text)
 end
 
+function ReaderFooter:getThreeZoneStartText()
+    return BD.auto(self.ui.doc_props.display_title or "")
+end
+
+function ReaderFooter:getThreeZonePercentageText()
+    local digits = self.settings.progress_pct_format
+    local string_percentage = "%." .. digits .. "f%%"
+    if self.ui.document:hasHiddenFlows() then
+        local flow = self.ui.document:getPageFlow(self.pageno)
+        if flow ~= 0 then
+            string_percentage = "[" .. string_percentage .. "]"
+        end
+    end
+    return string_percentage:format((self.percent_finished or 0) * 100)
+end
+
+function ReaderFooter:getThreeZonePagesLeftText()
+    local left = self.ui.toc and self.ui.toc:getChapterPagesLeft(self.pageno) or nil
+    left = left or self.ui.document:getTotalPagesLeft(self.pageno)
+    if left == nil then
+        return
+    end
+    if self.settings.pages_left_includes_current_page then
+        left = left + 1
+    end
+    local pages_left_text = T(N_("1 page left", "%1 pages left", left), left)
+    local current_unit = self:getThreeZoneCurrentUnitText()
+    if current_unit then
+        return T(_("%1 · %2"), current_unit, pages_left_text)
+    end
+    return pages_left_text
+end
+
+function ReaderFooter:getThreeZoneTimeLeftText()
+    if not self.ui.statistics then
+        return
+    end
+    local left = self.ui.toc and self.ui.toc:getChapterPagesLeft(self.pageno, true) or nil
+    left = left or self.ui.document:getTotalPagesLeft(self.pageno)
+    if left == nil then
+        return
+    end
+    return T(_("%1 left"), self.ui.statistics:getTimeForPages(left))
+end
+
+function ReaderFooter:getThreeZoneScreenPagesText()
+    if not self.pageno or not self.pages then
+        return
+    end
+    return T(_("Page %1 of %2"), self.pageno, self.pages)
+end
+
+function ReaderFooter:getThreeZonePrintPagesText()
+    if self.ui.pagemap and self.ui.pagemap:wantsPageLabels() then
+        return T(_("Page %1 of %2"), self.ui.pagemap:getCurrentPageLabel(true),
+                                      self.ui.pagemap:getLastPageLabel(true))
+    end
+end
+
+function ReaderFooter:getThreeZoneTocText()
+    if not self.ui.toc then
+        return
+    end
+    local toc_title = self.ui.toc:getTocTitleByPage(self.pageno)
+    if toc_title and toc_title ~= "" then
+        return BD.auto(toc_title)
+    end
+end
+
+function ReaderFooter:formatThreeZoneCurrentUnitText(toc_title)
+    if not toc_title or toc_title == "" then
+        return
+    end
+    local chars = util.splitToChars(toc_title)
+    local plain_chars = {}
+    for _, char in ipairs(chars) do
+        if not THREE_ZONE_BIDI_ISOLATES[char] then
+            table.insert(plain_chars, char)
+        end
+    end
+    local start_idx = 1
+    while plain_chars[start_idx] == " " or plain_chars[start_idx] == "\t" or plain_chars[start_idx] == "　" do
+        start_idx = start_idx + 1
+    end
+    local function compactPrefixedUnit(prefix, numbers, units)
+        if plain_chars[start_idx] ~= prefix then
+            return
+        end
+        local idx = start_idx + 1
+        while plain_chars[idx] and numbers[plain_chars[idx]] do
+            idx = idx + 1
+        end
+        if idx > start_idx + 1 and plain_chars[idx] and units[plain_chars[idx]] then
+            return table.concat(plain_chars, "", start_idx, idx)
+        end
+    end
+    local cjk_unit = compactPrefixedUnit("第", THREE_ZONE_CJK_NUMBERS, THREE_ZONE_CJK_UNITS)
+    if cjk_unit then return cjk_unit end
+    local korean_unit = compactPrefixedUnit("제", THREE_ZONE_KOREAN_NUMBERS, THREE_ZONE_KOREAN_UNITS)
+    if korean_unit then return korean_unit end
+    local plain_toc_title = table.concat(plain_chars)
+    local chapter = plain_toc_title:match("^%s*[Cc][Hh][Aa][Pp][Tt][Ee][Rr][%s%.:]+(.+)$")
+    if chapter then
+        local label = chapter:match("^([^%s%.:%-]+)")
+        if label and label ~= "" then
+            return T(_("Ch. %1"), label)
+        end
+    end
+    return plain_toc_title
+end
+
+function ReaderFooter:getThreeZoneCurrentUnitText()
+    return self:formatThreeZoneCurrentUnitText(self:getThreeZoneTocText())
+end
+
+function ReaderFooter:getThreeZoneCenterText(state)
+    if state == "pages_left" then
+        return self:getThreeZonePagesLeftText()
+    elseif state == "time_left" then
+        return self:getThreeZoneTimeLeftText()
+    elseif state == "screen_pages" then
+        return self:getThreeZoneScreenPagesText()
+    elseif state == "print_pages" then
+        return self:getThreeZonePrintPagesText()
+    elseif state == "toc_label" then
+        return self:getThreeZoneTocText()
+    elseif state == "empty_center" then
+        return ""
+    end
+end
+
+function ReaderFooter:getResolvedThreeZoneFooterState()
+    local current_state = self.settings.three_zone_footer_state
+    if self:getThreeZoneCenterText(current_state) ~= nil then
+        return current_state
+    end
+    for _, state in ipairs(THREE_ZONE_FOOTER_STATES) do
+        if self:getThreeZoneCenterText(state) ~= nil then
+            return state
+        end
+    end
+    return "empty_center"
+end
+
+function ReaderFooter:setThreeZoneFooterText()
+    local state = self:getResolvedThreeZoneFooterState()
+    self.settings.three_zone_footer_state = state
+    self.three_zone_start_text:setText(self:getThreeZoneStartText())
+    self.three_zone_center_text:setText(self:getThreeZoneCenterText(state) or "")
+    self.three_zone_end_text:setText(self:getThreeZonePercentageText())
+    self.footer_text:setText("")
+end
+
+function ReaderFooter:cycleThreeZoneFooterState()
+    local current_state = self:getResolvedThreeZoneFooterState()
+    local start_index = 0
+    for i, state in ipairs(THREE_ZONE_FOOTER_STATES) do
+        if state == current_state then
+            start_index = i
+            break
+        end
+    end
+    for offset = 1, #THREE_ZONE_FOOTER_STATES do
+        local candidate = THREE_ZONE_FOOTER_STATES[(start_index + offset - 1) % #THREE_ZONE_FOOTER_STATES + 1]
+        if self:getThreeZoneCenterText(candidate) ~= nil then
+            self.settings.three_zone_footer_state = candidate
+            G_reader_settings:saveSetting("footer", self.settings)
+            self:onUpdateFooter(true)
+            self:rescheduleFooterAutoRefreshIfNeeded()
+            return true
+        end
+    end
+end
+
 function ReaderFooter:genSeparator()
     local strings = {
         bar    = " | ",
@@ -2167,7 +2566,7 @@ function ReaderFooter:genAllFooterText(gen_to_skip)
 end
 
 function ReaderFooter:setTocMarkers(reset)
-    if self.settings.disable_progress_bar or self.settings.progress_style_thin then return end
+    if self:isThreeZoneLayout() or self.settings.disable_progress_bar or self.settings.progress_style_thin then return end
     if reset then
         self.progress_bar.ticks = nil
     end
@@ -2234,6 +2633,7 @@ function ReaderFooter:updateFooterFont()
         self.settings.text_font_face = self.default_settings.text_font_face
     end
     self.footer_text_face = Font:getFace(self.settings.text_font_face, self.settings.text_font_size)
+    self.three_zone_text_face = Font:getFace(self.settings.text_font_face, self.settings.three_zone_text_font_size)
     self.footer_text:free()
     self.footer_text = TextWidget:new{
         text = self.footer_text.text,
@@ -2241,6 +2641,29 @@ function ReaderFooter:updateFooterFont()
         bold = self.settings.text_font_bold,
     }
     self.text_container[1] = self.footer_text
+    self.three_zone_start_text:free()
+    self.three_zone_center_text:free()
+    self.three_zone_end_text:free()
+    self.three_zone_start_text = TextWidget:new{
+        text = self.three_zone_start_text.text,
+        face = self.three_zone_text_face,
+        bold = self.settings.three_zone_text_font_bold,
+    }
+    self.three_zone_center_text = TextWidget:new{
+        text = self.three_zone_center_text.text,
+        face = self.three_zone_text_face,
+        bold = self.settings.three_zone_text_font_bold,
+    }
+    self.three_zone_end_text = TextWidget:new{
+        text = self.three_zone_end_text.text,
+        face = self.three_zone_text_face,
+        bold = self.settings.three_zone_text_font_bold,
+    }
+    if self.three_zone_container then
+        self.three_zone_container[1] = self.three_zone_start_text
+        self.three_zone_container[2] = self.three_zone_center_text
+        self.three_zone_container[3] = self.three_zone_end_text
+    end
 end
 
 -- updateFooterText will start as a noop. After onReaderReady event is
@@ -2255,64 +2678,75 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
         return
     end
 
-    local text = self:genFooterText() or ""
-    self.footer_text:setText(text)
-
-    if self.settings.disable_progress_bar then
-        if self.has_no_mode or text == "" then
-            self.text_width = 0
-            self.footer_text.height = 0
-        else
-            -- No progress bar, we're only constrained to fit inside self.footer_container
-            self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * self.horizontal_margin))
-            self.text_width = self.footer_text:getSize().w
-            self.footer_text.height = self.footer_text:getSize().h
-        end
-        self.progress_bar.height = 0
+    if self:isThreeZoneLayout() then
+        self:setThreeZoneFooterText()
+        self.text_width = 0
+        self.footer_text.height = 0
         self.progress_bar.width = 0
-    elseif self.settings.progress_bar_position ~= "alongside" then
-        local margins_width = 2 * Screen:scaleBySize(self.settings.progress_margin_width)
-        if self.has_no_mode or text == "" then
-            self.text_width = 0
-            self.footer_text.height = 0
-        else
-            -- With a progress bar above or below us, we want to align ourselves to the bar's margins... iff text is centered.
-            if self.settings.align == "center" then
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - margins_width))
-            else
-                -- Otherwise, we have to constrain ourselves to the container, or weird shit happens.
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * self.horizontal_margin))
-            end
-            self.text_width = self.footer_text:getSize().w
-            self.footer_text.height = self.footer_text:getSize().h
-        end
-        self.progress_bar.width = math.floor(self._saved_screen_width - margins_width)
+        self.progress_bar.height = 0
     else
-        local margins_width = 2 * Screen:scaleBySize(self.settings.progress_margin_width)
-        if self.has_no_mode or text == "" then
-            self.text_width = 0
-            self.footer_text.height = 0
-        else
-            if self.settings.progress_bar_lock_width then -- Alongside text items, with fixed width setting.
-                local bar_width = (1/100 * self.settings.progress_bar_min_width_pct * self._saved_screen_width)
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - bar_width))
-                self.text_width = self._saved_screen_width - bar_width + self.horizontal_margin
+        local text = self:genFooterText() or ""
+        self.footer_text:setText(text)
+
+        if self.settings.disable_progress_bar then
+            if self.has_no_mode or text == "" then
+                self.text_width = 0
+                self.footer_text.height = 0
             else
-                -- Alongside text items (progress bar uses remaining space).
-                local text_max_available_ratio = (100 - self.settings.progress_bar_min_width_pct) * (1/100)
-                self.footer_text:setMaxWidth(math.floor(text_max_available_ratio * self._saved_screen_width - margins_width - self.horizontal_margin))
-                -- Add some spacing between the text and the bar
-                self.text_width = self.footer_text:getSize().w + self.horizontal_margin
+                -- No progress bar, we're only constrained to fit inside self.footer_container
+                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * self.horizontal_margin))
+                self.text_width = self.footer_text:getSize().w
+                self.footer_text.height = self.footer_text:getSize().h
             end
-            self.footer_text.height = self.footer_text:getSize().h
+            self.progress_bar.height = 0
+            self.progress_bar.width = 0
+        elseif self.settings.progress_bar_position ~= "alongside" then
+            local margins_width = 2 * Screen:scaleBySize(self.settings.progress_margin_width)
+            if self.has_no_mode or text == "" then
+                self.text_width = 0
+                self.footer_text.height = 0
+            else
+                -- With a progress bar above or below us, we want to align ourselves to the bar's margins... iff text is centered.
+                if self.settings.align == "center" then
+                    self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - margins_width))
+                else
+                    -- Otherwise, we have to constrain ourselves to the container, or weird shit happens.
+                    self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * self.horizontal_margin))
+                end
+                self.text_width = self.footer_text:getSize().w
+                self.footer_text.height = self.footer_text:getSize().h
+            end
+            self.progress_bar.width = math.floor(self._saved_screen_width - margins_width)
+        else
+            local margins_width = 2 * Screen:scaleBySize(self.settings.progress_margin_width)
+            if self.has_no_mode or text == "" then
+                self.text_width = 0
+                self.footer_text.height = 0
+            else
+                if self.settings.progress_bar_lock_width then -- Alongside text items, with fixed width setting.
+                    local bar_width = (1/100 * self.settings.progress_bar_min_width_pct * self._saved_screen_width)
+                    self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - bar_width))
+                    self.text_width = self._saved_screen_width - bar_width + self.horizontal_margin
+                else
+                    -- Alongside text items (progress bar uses remaining space).
+                    local text_max_available_ratio = (100 - self.settings.progress_bar_min_width_pct) * (1/100)
+                    self.footer_text:setMaxWidth(math.floor(text_max_available_ratio * self._saved_screen_width - margins_width - self.horizontal_margin))
+                    -- Add some spacing between the text and the bar
+                    self.text_width = self.footer_text:getSize().w + self.horizontal_margin
+                end
+                self.footer_text.height = self.footer_text:getSize().h
+            end
+            self.progress_bar.width = math.floor(self._saved_screen_width - margins_width - self.text_width)
         end
-        self.progress_bar.width = math.floor(self._saved_screen_width - margins_width - self.text_width)
     end
 
     if self.separator_line then
         self.separator_line.dimen.w = self._saved_screen_width - 2 * self.horizontal_margin
     end
     self.text_container.dimen.w = self.text_width
+    if self:isThreeZoneLayout() then
+        self:updateThreeZoneLayout()
+    end
     self.horizontal_group:resetLayout()
     -- NOTE: This is essentially preventing us from truly using "fast" for panning,
     --       since it'll get coalesced in the "fast" panning update, upgrading it to "ui".
@@ -2467,7 +2901,7 @@ function ReaderFooter:onExitFlippingMode()
 end
 
 function ReaderFooter:TapFooter(ges)
-    if self.view.flipping_visible and ges then
+    if self.view.flipping_visible and ges and not self:isThreeZoneLayout() then
         local pos = ges.pos
         local dimen = self.progress_bar.dimen
         -- if reader footer is not drawn before the dimen value should be nil
@@ -2479,6 +2913,9 @@ function ReaderFooter:TapFooter(ges)
         return true
     end
     if self.settings.lock_tap then return end
+    if self:isThreeZoneLayout() and self.view.footer_visible then
+        return self:cycleThreeZoneFooterState()
+    end
     return self:onToggleFooterMode()
 end
 

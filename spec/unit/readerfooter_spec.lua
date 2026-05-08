@@ -1,5 +1,5 @@
 describe("Readerfooter module", function()
-    local DocumentRegistry, ReaderUI, ReaderFooter, DocSettings, UIManager
+    local DocumentRegistry, ReaderUI, ReaderFooter, DocSettings, UIManager, BD
     local purgeDir, Screen
     local tapFooterMenu
     local sample_epub = "spec/front/unit/data/juliet.epub"
@@ -24,6 +24,7 @@ describe("Readerfooter module", function()
         ReaderUI = require("apps/reader/readerui")
         ReaderFooter = require("apps/reader/modules/readerfooter")
         UIManager = require("ui/uimanager")
+        BD = require("ui/bidi")
         purgeDir = require("ffi/util").purgeDir
         Screen = require("device").screen
 
@@ -98,6 +99,18 @@ describe("Readerfooter module", function()
         purgeDir(DocSettings:getSidecarDir(sample_pdf))
         os.remove(DocSettings:getHistoryPath(sample_pdf))
     end)
+
+    local function assertThreeZoneGroupSpacing(footer)
+        local gap = Screen:scaleBySize(footer.settings.three_zone_min_gap)
+        local width = footer.three_zone_container.dimen.w
+        local center_width = footer.three_zone_center_text:getSize().w
+        local center_x = math.floor((width - center_width) / 2)
+        local end_width = footer.three_zone_end_text:getSize().w
+        local end_x = width - end_width
+
+        assert.is.truthy(footer.three_zone_start_text:getSize().w <= center_x - gap)
+        assert.is.truthy(center_x + center_width + gap <= end_x)
+    end
 
     it("should setup footer as visible in all_at_once mode", function()
         G_reader_settings:saveSetting("reader_footer_mode", 1)
@@ -271,6 +284,117 @@ describe("Readerfooter module", function()
         -- Make it visible again to make the following tests behave...
         footer:TapFooter()
         assert.is.same(1, footer.mode)
+    end)
+
+    it("should render an opt-in three-zone footer", function()
+        local settings = G_reader_settings:readSetting("footer")
+        settings.footer_layout = "three_zone"
+        G_reader_settings:saveSetting("footer", settings)
+
+        readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
+            document = DocumentRegistry:openDocument(sample_epub),
+        }
+        local footer = readerui.view.footer
+        footer:onPageUpdate(1)
+        footer:onUpdateFooter()
+
+        assert.are.same("", footer.footer_text.text)
+        assert.is.truthy(#footer.three_zone_start_text.text > 0)
+        assert.is.truthy(footer.three_zone_center_text.text:match("^%d+ pages? left$"))
+        assert.are.same("0%", footer.three_zone_end_text.text)
+        assert.are.same(0, footer.progress_bar.width)
+        assert.are.same(0, footer.progress_bar.height)
+        assert.are.same(Screen:getWidth() - 2 * footer.horizontal_margin, footer.three_zone_container.dimen.w)
+        assert.is.truthy(footer.three_zone_text_face.size < footer.footer_text_face.size)
+        assert.are.same(true, footer.three_zone_start_text.bold)
+        assertThreeZoneGroupSpacing(footer)
+    end)
+
+    it("should cycle only the center item in three-zone footer layout", function()
+        local settings = G_reader_settings:readSetting("footer")
+        settings.footer_layout = "three_zone"
+        settings.three_zone_footer_state = "pages_left"
+        G_reader_settings:saveSetting("footer", settings)
+
+        readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
+            document = DocumentRegistry:openDocument(sample_epub),
+        }
+        local footer = readerui.view.footer
+        footer:onPageUpdate(1)
+
+        local mode = footer.mode
+        footer:TapFooter()
+
+        assert.are.same(mode, footer.mode)
+        assert.are.same("screen_pages", footer.settings.three_zone_footer_state)
+        assert.is.truthy(footer.three_zone_center_text.text:match("^Page 1 of %d+$"))
+    end)
+
+    it("should compact chapter-like unit labels in three-zone pages-left text", function()
+        local settings = G_reader_settings:readSetting("footer")
+        settings.footer_layout = "three_zone"
+        G_reader_settings:saveSetting("footer", settings)
+
+        readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
+            document = DocumentRegistry:openDocument(sample_epub),
+        }
+        local footer = readerui.view.footer
+
+        assert.are.same("Ch. 12", footer:formatThreeZoneCurrentUnitText("Chapter 12: A title"))
+        assert.are.same("Ch. I", footer:formatThreeZoneCurrentUnitText("CHAPTER I"))
+        assert.are.same("Letter 1", footer:formatThreeZoneCurrentUnitText("Letter 1"))
+        assert.are.same("第一章", footer:formatThreeZoneCurrentUnitText("第一章　陰翳礼讃"))
+        assert.are.same("第3話", footer:formatThreeZoneCurrentUnitText("第3話 影"))
+        assert.are.same("제1장", footer:formatThreeZoneCurrentUnitText("제1장 그림자"))
+        assert.are.same("一", footer:formatThreeZoneCurrentUnitText("一"))
+        assert.are.same("第一章", footer:formatThreeZoneCurrentUnitText(BD.auto("第一章　陰翳礼讃")))
+        assert.are.same("Ch. 12", footer:formatThreeZoneCurrentUnitText(BD.auto("Chapter 12: A title")))
+    end)
+
+    it("should constrain three-zone title text before the centered item", function()
+        local settings = G_reader_settings:readSetting("footer")
+        settings.footer_layout = "three_zone"
+        G_reader_settings:saveSetting("footer", settings)
+
+        readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
+            document = DocumentRegistry:openDocument(sample_epub),
+        }
+        local footer = readerui.view.footer
+        readerui.doc_props.display_title = ("A very long book title "):rep(20)
+        footer:onPageUpdate(1)
+        footer:onUpdateFooter()
+
+        local center_width = footer.three_zone_center_text:getSize().w
+        local center_x = math.floor((footer.three_zone_container.dimen.w - center_width) / 2)
+        assert.is.truthy(footer.three_zone_start_text:getSize().w <= center_x - Screen:scaleBySize(footer.settings.three_zone_min_gap))
+        assertThreeZoneGroupSpacing(footer)
+    end)
+
+    it("should preserve three-zone group spacing after screen resize", function()
+        local settings = G_reader_settings:readSetting("footer")
+        settings.footer_layout = "three_zone"
+        G_reader_settings:saveSetting("footer", settings)
+
+        readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
+            document = DocumentRegistry:openDocument(sample_epub),
+        }
+        local footer = readerui.view.footer
+        footer:onPageUpdate(1)
+        footer:onUpdateFooter()
+
+        local old_screen_getwidth = Screen.getWidth
+        Screen.getWidth = function() return 360 end
+        footer:resetLayout(true)
+        footer:onUpdateFooter()
+
+        assert.are.same(360 - 2 * footer.horizontal_margin, footer.three_zone_container.dimen.w)
+        assertThreeZoneGroupSpacing(footer)
+        Screen.getWidth = old_screen_getwidth
     end)
 
     it("should pick up screen resize in resetLayout", function()
