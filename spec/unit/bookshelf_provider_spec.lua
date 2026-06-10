@@ -191,6 +191,33 @@ describe("Bookshelf downloaded-book provider", function()
         assert.equals("Jacob Grimm, Wilhelm Grimm", records[1].authors)
     end)
 
+    it("enriches the continue record with the cached resume snippet", function()
+        local record = Provider.getContinue({
+            ReadHistory = {
+                reload = function() end,
+                hist = {
+                    {
+                        file = "/downloads/grimms.epub",
+                        doc_props = { title = "Grimms' Fairy Tales", authors = "Jacob Grimm" },
+                        book_info = { been_opened = true, status = "reading", percent_finished = 0.03 },
+                        attributes = { mode = "file" },
+                    },
+                },
+            },
+            read_doc_setting = function(file, key)
+                assert.equals("/downloads/grimms.epub", file)
+                if key == "bookshelf_resume_snippet" then
+                    return "In the olden days, when wishing still helped…"
+                elseif key == "bookshelf_resume_chapter" then
+                    return "The Frog-King"
+                end
+            end,
+        })
+
+        assert.equals("In the olden days, when wishing still helped…", record.resume_snippet)
+        assert.equals("The Frog-King", record.resume_chapter)
+    end)
+
     it("handles large synthetic downloaded shelves", function()
         for _, size in ipairs({ 0, 1, 12, 100, 1000, 5000 }) do
             local records = Provider.recordsFromRows(synthetic_rows(size), no_probe_opts())

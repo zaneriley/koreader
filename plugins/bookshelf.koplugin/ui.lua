@@ -1395,17 +1395,20 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
         line_height = BookTextTokens.title_line_height,
     })
 
+    local cursor_y = cover_y + title_size.h
     local author = self:_entryAuthor(entry)
     if author and author ~= "" then
-        self:_paintText(bb, author, text_x, cover_y + title_size.h + self:_px(Space.s), {
+        local author_size = self:_paintText(bb, author, text_x, cursor_y + self:_px(Space.s), {
             face = FontTokens.sans,
             size = TypeScale.category,
             color = Blitbuffer.COLOR_DARK_GRAY,
             max_width = text_w,
         })
+        cursor_y = cursor_y + self:_px(Space.s) + author_size.h
     end
 
     local bar_y = cover_y + cover_h - math.max(1, self:_px(Space.xs))
+    local meta_top = bar_y
     local summary = self:_progressSummary(entry)
     if summary ~= "" then
         local summary_size = self:_textSize(summary, {
@@ -1413,7 +1416,8 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
             size = TypeScale.card_title,
             max_width = text_w,
         })
-        self:_paintText(bb, summary, text_x, bar_y - self:_px(Space.s) - summary_size.h, {
+        meta_top = bar_y - self:_px(Space.s) - summary_size.h
+        self:_paintText(bb, summary, text_x, meta_top, {
             face = FontTokens.sans,
             size = TypeScale.card_title,
             color = Blitbuffer.COLOR_DARK_GRAY,
@@ -1421,6 +1425,28 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
         })
     end
     self:_paintProgressLine(bb, text_x, bar_y, text_w, entry.percent_finished)
+
+    local snippet = entry and entry.resume_snippet
+    if type(snippet) == "string" and snippet ~= "" then
+        local snippet_y = cursor_y + self:_px(Space.m)
+        local line_metrics = self:_textBoxLineMetrics(
+            FontTokens.display_italic,
+            TypeScale.category,
+            BookTextTokens.title_line_height,
+            1)
+        local available = meta_top - self:_px(Space.m) - snippet_y
+        local lines = math.min(3, math.floor(available / line_metrics.line_h))
+        if lines >= 1 then
+            self:_paintTextBox(bb, "“" .. snippet .. "”", text_x, snippet_y, text_w, {
+                face = FontTokens.display_italic,
+                size = TypeScale.category,
+                color = Blitbuffer.COLOR_DARK_GRAY,
+                height = lines * line_metrics.line_h,
+                height_adjust = true,
+                line_height = BookTextTokens.title_line_height,
+            })
+        end
+    end
 
     self:_paintCenteredIcon(bb, "more", menu_x, y + pad, menu_size, menu_size, false)
     self:_zone("continue_card", Geom:new{x = x, y = y, w = w, h = h}, function()

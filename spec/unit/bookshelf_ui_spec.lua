@@ -569,6 +569,54 @@ describe("Bookshelf UI module", function()
         assert.equals(254, LibraryUI._continueShelfBodyHeight(fake))
     end)
 
+    it("paints the resume snippet as quoted italic prose inside the continue card", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local boxes = {}
+        local fake = setmetatable({
+            shelf_scale = 1,
+            _bookCardMetrics = function()
+                return { outer = 16, gutter = 16 }
+            end,
+            _paintPressedRect = function() end,
+            _paintRectBorder = function() end,
+            _paintBookCover = function() end,
+            _paintCenteredIcon = function() end,
+            _paintProgressLine = function() end,
+            _paintText = function()
+                return { w = 60, h = 14 }
+            end,
+            _paintTextBox = function(_, _, text, _, _, _, options)
+                table.insert(boxes, { text = text, face = options.face })
+                return { w = 100, h = 30 }
+            end,
+            _textSize = function()
+                return { w = 50, h = 12 }
+            end,
+            _iconSize = function()
+                return 24
+            end,
+            _zone = function() end,
+            _continue = function() end,
+            _showMore = function() end,
+            _px = function(_, value)
+                return value
+            end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._paintContinueCard(fake, {}, {
+            display_title = "Grimms' Fairy Tales",
+            authors = "Jacob Grimm",
+            percent_finished = 0.03,
+            resume_snippet = "In the olden days, when wishing still helped",
+        }, 0, 0, 600, 254)
+
+        -- first box is the title, second is the snippet
+        assert.equals(2, #boxes)
+        assert.is_truthy(boxes[2].text:find("In the olden days", 1, true))
+        assert.is_truthy(boxes[2].text:find("“", 1, true))
+        assert.equals("NotoSerif-Italic.ttf", boxes[2].face)
+    end)
+
     it("uses shared layout spacing tokens for shelf positioning", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local fake = setmetatable({

@@ -142,4 +142,30 @@ function Bookshelf:onShowHome()
     return false
 end
 
+function Bookshelf:_captureResumeSnippet()
+    if not (self.ui and self.ui.document) then
+        return
+    end
+    local ok, ResumeSnippet = pcall(dofile, self.path .. "/resumesnippet.lua")
+    if not ok then
+        logger.warn("Bookshelf resume snippet loader failed:", ResumeSnippet)
+        return
+    end
+    local capture_ok, capture_err = pcall(ResumeSnippet.capture, self.ui)
+    if not capture_ok then
+        logger.warn("Bookshelf resume snippet capture failed:", capture_err)
+    end
+end
+
+-- The reader closes the document before its deferred settings flush, so
+-- capture on CloseDocument (document still live); SaveSettings covers
+-- suspend and periodic autosave while reading.
+function Bookshelf:onSaveSettings()
+    self:_captureResumeSnippet()
+end
+
+function Bookshelf:onCloseDocument()
+    self:_captureResumeSnippet()
+end
+
 return Bookshelf
