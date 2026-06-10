@@ -261,14 +261,22 @@ function Bookshelf:_captureResumeSnippet()
     if not (self.ui and self.ui.document) then
         return
     end
+    -- SaveSettings and CloseDocument can both fire around one close;
+    -- capture at most once per moment.
+    local now = os.time()
+    if self._snippet_captured_at and now - self._snippet_captured_at < 2 then
+        return
+    end
     local ok, ResumeSnippet = pcall(dofile, self.path .. "/resumesnippet.lua")
     if not ok then
         logger.warn("Bookshelf resume snippet loader failed:", ResumeSnippet)
         return
     end
-    local capture_ok, capture_err = pcall(ResumeSnippet.capture, self.ui)
+    local capture_ok, captured = pcall(ResumeSnippet.capture, self.ui)
     if not capture_ok then
-        logger.warn("Bookshelf resume snippet capture failed:", capture_err)
+        logger.warn("Bookshelf resume snippet capture failed:", captured)
+    elseif captured then
+        self._snippet_captured_at = now
     end
 end
 

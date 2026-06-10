@@ -95,6 +95,28 @@ describe("Bookshelf resume snippet", function()
         assert.equals("In the olden days", saved.bookshelf_resume_snippet)
     end)
 
+    it("declines while a user text selection is active", function()
+        local saved = {}
+        local ui = {
+            document = {
+                getTextFromPositions = function()
+                    error("must not touch the document during a user selection")
+                end,
+            },
+            doc_settings = {
+                saveSetting = function(_, key, value)
+                    saved[key] = value
+                end,
+            },
+            highlight = {
+                selected_text = { text = "user is selecting" },
+            },
+        }
+
+        assert.is_false(ResumeSnippet.capture(ui, {}))
+        assert.is_nil(saved.bookshelf_resume_snippet)
+    end)
+
     it("declines gracefully when no text is available", function()
         local saved = {}
         local ui = {

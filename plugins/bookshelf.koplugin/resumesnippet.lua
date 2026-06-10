@@ -122,6 +122,13 @@ function ResumeSnippet.capture(ui, deps)
         return false
     end
 
+    -- Never disturb an in-progress user selection: capturing reselects the
+    -- page and clears crengine's selection state.
+    local highlight = ui.highlight
+    if highlight and (highlight.selected_text or highlight.hold_pos) then
+        return false
+    end
+
     local raw = pageTextFromCre(document, deps)
     if raw == nil or raw == "" then
         raw = pageTextFromBoxes(document, ui)

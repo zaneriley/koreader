@@ -685,6 +685,49 @@ describe("Bookshelf UI module", function()
         assert.equals(150 + 24, title_x)
     end)
 
+    it("skips the progress block for a book with no reading state", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local bar_calls = 0
+        local fake = setmetatable({
+            shelf_scale = 1,
+            _bookCardMetrics = function()
+                return { outer = 16, gutter = 16 }
+            end,
+            _paintPressedRect = function() end,
+            _paintRectBorder = function() end,
+            _paintBookCover = function() end,
+            _paintCenteredIcon = function() end,
+            _paintProgressLine = function()
+                bar_calls = bar_calls + 1
+            end,
+            _paintText = function()
+                return { w = 60, h = 14 }
+            end,
+            _paintTextBox = function()
+                return { w = 100, h = 30 }
+            end,
+            _textSize = function()
+                return { w = 50, h = 12 }
+            end,
+            _iconSize = function()
+                return 24
+            end,
+            _zone = function() end,
+            _continue = function() end,
+            _showMore = function() end,
+            _px = function(_, value)
+                return value
+            end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._paintContinueCard(fake, {}, {
+            display_title = "Untouched Book",
+            status = "new",
+        }, 0, 0, 600, 254)
+
+        assert.equals(0, bar_calls)
+    end)
+
     it("uses shared layout spacing tokens for shelf positioning", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local fake = setmetatable({

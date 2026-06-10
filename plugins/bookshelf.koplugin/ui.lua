@@ -51,7 +51,6 @@ local TypeScale = {
     card_meta = 10,
     card_title = 12,
     category = 13,
-    control = 13,
     hero_title = 20,
     page_title = 38,
 }
@@ -63,7 +62,6 @@ local Space = {
     m = 12,
     l = 16,
     xl = 24,
-    xxl = 32,
 }
 
 -- Rail grammar: a half cover sliced at the edge means "more books, swipe".
@@ -770,25 +768,6 @@ function LibraryUI:_bookCardMetrics(kind, card_scale)
     return GridLayout.metrics(kind, card_scale or self.shelf_scale, self:_bookTextStack(kind))
 end
 
-function LibraryUI:_bookCardScaleForHeight(kind, height, max_scale)
-    max_scale = max_scale or self.shelf_scale or 1
-    if not height or height <= 0 or self:_bookCardMetrics(kind, max_scale).card_h <= height then
-        return max_scale
-    end
-
-    local low = 0
-    local high = max_scale
-    for _ = 1, 16 do
-        local mid = (low + high) / 2
-        if self:_bookCardMetrics(kind, mid).card_h <= height then
-            low = mid
-        else
-            high = mid
-        end
-    end
-    return low
-end
-
 function LibraryUI:_paintTextBox(bb, text, x, y, width, options)
     options = options or {}
     local widget = TextBoxWidget:new{
@@ -1231,7 +1210,7 @@ function LibraryUI:_progressSummary(entry)
     local percent_text = string.format("%d%% read", math.floor(percent * 100 + 0.5))
     local page = tonumber(entry.current_page)
     local pages = tonumber(entry.pages)
-    if not page and pages and pages > 1 then
+    if not page and pages and pages > 1 and percent > 0 then
         page = math.min(pages, math.max(1, math.floor(percent * pages + 0.5)))
     end
     if page and pages and pages > 1 then
@@ -1435,24 +1414,32 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
         cursor_y = cursor_y + self:_px(Space.s) + author_size.h
     end
 
-    local bar_y = y + h - pad - math.max(1, self:_px(Space.xs))
-    local meta_top = bar_y
-    local summary = self:_progressSummary(entry)
-    if summary ~= "" then
-        local summary_size = self:_textSize(summary, {
-            face = FontTokens.sans,
-            size = TypeScale.card_title,
-            max_width = text_w,
-        })
-        meta_top = bar_y - self:_px(Space.s) - summary_size.h
-        self:_paintText(bb, summary, text_x, meta_top, {
-            face = FontTokens.sans,
-            size = TypeScale.card_title,
-            color = Blitbuffer.COLOR_DARK_GRAY,
-            max_width = text_w,
-        })
+    -- A book with no reading state yet gets no progress block: "0% read"
+    -- and an empty bar would misrepresent a never-opened book.
+    local meta_top = y + h - pad
+    local percent = tonumber(entry and entry.percent_finished) or 0
+    local has_progress = percent > 0
+        or (entry and (entry.current or entry.status == "reading" or entry.status == "complete"))
+    if has_progress then
+        local bar_y = y + h - pad - math.max(1, self:_px(Space.xs))
+        meta_top = bar_y
+        local summary = self:_progressSummary(entry)
+        if summary ~= "" then
+            local summary_size = self:_textSize(summary, {
+                face = FontTokens.sans,
+                size = TypeScale.card_title,
+                max_width = text_w,
+            })
+            meta_top = bar_y - self:_px(Space.s) - summary_size.h
+            self:_paintText(bb, summary, text_x, meta_top, {
+                face = FontTokens.sans,
+                size = TypeScale.card_title,
+                color = Blitbuffer.COLOR_DARK_GRAY,
+                max_width = text_w,
+            })
+        end
+        self:_paintProgressLine(bb, text_x, bar_y, text_w, entry.percent_finished)
     end
-    self:_paintProgressLine(bb, text_x, bar_y, text_w, entry.percent_finished)
 
     local snippet = entry and entry.resume_snippet
     if type(snippet) == "string" and snippet ~= "" then

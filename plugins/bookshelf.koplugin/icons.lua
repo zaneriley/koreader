@@ -115,11 +115,6 @@ function Icons.paint(bb, name, x, y, size, opts)
         local bx, by, bw, bh = rect(0.17, 0.05, 0.66, 0.90)
         rectBorder(bb, bx, by, bw, bh, line, color)
         bb:paintRect(bx + px(0.16), by + px(0.12), line, bh - px(0.24), color)
-    elseif name == "document" then
-        local bx, by, bw, bh = rect(0.22, 0.08, 0.56, 0.84)
-        rectBorder(bb, bx, by, bw, bh, line, color)
-        bb:paintRect(bx + px(0.14), by + px(0.28), bw - px(0.28), line, color)
-        bb:paintRect(bx + px(0.14), by + px(0.44), bw - px(0.28), line, color)
     elseif name == "add" then
         local bx, by, bw, bh = rect(0.10, 0.10, 0.80, 0.80)
         rectBorder(bb, bx, by, bw, bh, line, color)
