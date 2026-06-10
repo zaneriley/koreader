@@ -25,10 +25,24 @@ local plugin_dir = source:match("^@(.+)/[^/]+$") or "plugins/bookshelf.koplugin"
 local GridLayout = dofile(plugin_dir .. "/gridlayout.lua")
 local Icons = dofile(plugin_dir .. "/icons.lua")
 
+-- Prefer the chosen reading face for the shelf's serif voice when it is
+-- installed (user fonts dir), so the library home matches the book pages;
+-- degrade to the bundled face otherwise.
+local function resolveFace(preferred, fallback)
+    local ok, face = pcall(Font.getFace, Font, preferred, 16)
+    if ok and face then
+        return preferred
+    end
+    return fallback
+end
+
+local serif_face = resolveFace("SourceSerif4SmText-Regular.ttf", "NotoSerif-Regular.ttf")
+local serif_italic_face = resolveFace("SourceSerif4SmText-It.ttf", "NotoSerif-Italic.ttf")
+
 local FontTokens = {
-    display = "NotoSerif-Regular.ttf",
-    display_italic = "NotoSerif-Italic.ttf",
-    serif_safe = "NotoSerif-Regular.ttf",
+    display = serif_face,
+    display_italic = serif_italic_face,
+    serif_safe = serif_face,
     sans = "NotoSans-Regular.ttf",
     sans_bold = "NotoSans-Bold.ttf",
 }
@@ -118,6 +132,9 @@ local LibraryUI = InputContainer:extend{
     library_page = 1,
     pressed_zone_id = nil,
 }
+
+-- Exposed for specs: face resolution depends on which fonts are installed.
+LibraryUI._font_tokens = FontTokens
 
 function LibraryUI:_triggerBackgroundExtraction()
     local manager = self:_bookInfoManager()

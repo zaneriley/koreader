@@ -617,7 +617,9 @@ describe("Bookshelf UI module", function()
         assert.equals(2, #boxes)
         assert.is_truthy(boxes[2].text:find("In the olden days", 1, true))
         assert.is_truthy(boxes[2].text:find("“", 1, true))
-        assert.equals("NotoSerif-Italic.ttf", boxes[2].face)
+        -- the snippet uses the resolved italic serif voice, whichever face
+        -- is installed in this environment
+        assert.equals(LibraryUI._font_tokens.display_italic, boxes[2].face)
 
         -- without artwork, the placeholder cover box bleeds flush to the
         -- card's top, left, and bottom edges at the 2:3 ratio
