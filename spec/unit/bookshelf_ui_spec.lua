@@ -572,6 +572,7 @@ describe("Bookshelf UI module", function()
     it("paints the resume snippet as quoted italic prose inside the continue card", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local boxes = {}
+        local cover_call
         local fake = setmetatable({
             shelf_scale = 1,
             _bookCardMetrics = function()
@@ -579,7 +580,9 @@ describe("Bookshelf UI module", function()
             end,
             _paintPressedRect = function() end,
             _paintRectBorder = function() end,
-            _paintBookCover = function() end,
+            _paintBookCover = function(_, _, _, cx, cy, cw, ch)
+                cover_call = { x = cx, y = cy, w = cw, h = ch }
+            end,
             _paintCenteredIcon = function() end,
             _paintProgressLine = function() end,
             _paintText = function()
@@ -615,6 +618,69 @@ describe("Bookshelf UI module", function()
         assert.is_truthy(boxes[2].text:find("In the olden days", 1, true))
         assert.is_truthy(boxes[2].text:find("“", 1, true))
         assert.equals("NotoSerif-Italic.ttf", boxes[2].face)
+
+        -- without artwork, the placeholder cover box bleeds flush to the
+        -- card's top, left, and bottom edges at the 2:3 ratio
+        assert.equals(0, cover_call.x)
+        assert.equals(0, cover_call.y)
+        assert.equals(254, cover_call.h)
+        assert.equals(169, cover_call.w)
+    end)
+
+    it("bleeds real cover art flush and sizes the text column from its width", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local blit
+        local title_x
+        local bb = {
+            blitFrom = function(_, _, bx, by)
+                blit = { x = bx, y = by }
+            end,
+        }
+        local fake = setmetatable({
+            shelf_scale = 1,
+            _bookCardMetrics = function()
+                return { outer = 16, gutter = 16 }
+            end,
+            _cachedCoverFor = function()
+                return { bb = "cover", w = 150, h = 254 }
+            end,
+            _paintPressedRect = function() end,
+            _paintRectBorder = function() end,
+            _paintBookCover = function()
+                error("placeholder path must not run when artwork exists")
+            end,
+            _paintCenteredIcon = function() end,
+            _paintProgressLine = function() end,
+            _paintText = function()
+                return { w = 60, h = 14 }
+            end,
+            _paintTextBox = function(_, _, _, tx)
+                title_x = title_x or tx
+                return { w = 100, h = 30 }
+            end,
+            _textSize = function()
+                return { w = 50, h = 12 }
+            end,
+            _iconSize = function()
+                return 24
+            end,
+            _zone = function() end,
+            _continue = function() end,
+            _showMore = function() end,
+            _px = function(_, value)
+                return value
+            end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._paintContinueCard(fake, bb, {
+            display_title = "Grimms' Fairy Tales",
+            percent_finished = 0.03,
+        }, 0, 0, 600, 254)
+
+        assert.equals(0, blit.x)
+        assert.equals(0, blit.y)
+        -- text column starts after the art's real width plus the 24du gap
+        assert.equals(150 + 24, title_x)
     end)
 
     it("uses shared layout spacing tokens for shelf positioning", function()

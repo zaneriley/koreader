@@ -1353,13 +1353,14 @@ function LibraryUI:_continueCardMetrics(card_scale)
     card_scale = card_scale or self.shelf_scale or 1
     local pad = self:_shelfPadding("large")
     local spec = GridLayout.spec("large")
-    local cover_w = GridLayout.scaleValue(spec.cover_w, card_scale)
-    local cover_h = GridLayout.scaleValue(spec.cover_w * GridLayout.cover_ratio, card_scale)
+    local h = GridLayout.scaleValue(spec.cover_w * GridLayout.cover_ratio, card_scale) + pad * 2
     return {
         pad = pad,
-        cover_w = cover_w,
-        cover_h = cover_h,
-        h = cover_h + pad * 2,
+        -- The cover bleeds to the card's top, left, and bottom edges so it
+        -- left-aligns with the shelf covers below and reads a size larger.
+        cover_w = math.floor(h / GridLayout.cover_ratio + 0.5),
+        cover_h = h,
+        h = h,
     }
 end
 
@@ -1367,27 +1368,37 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
     local metrics = self:_continueCardMetrics()
     h = h or metrics.h
     local pad = metrics.pad
-    local cover_h = math.min(metrics.cover_h, math.max(1, h - pad * 2))
-    local cover_w = math.floor(cover_h / GridLayout.cover_ratio + 0.5)
+    local cover_h = math.max(1, h)
 
     self:_paintPressedRect(bb, "continue_card", x, y, w, h)
     self:_paintRectBorder(bb, x, y, w, h, Blitbuffer.COLOR_LIGHT_GRAY)
 
-    local cover_x = x + pad
-    local cover_y = y + math.floor((h - cover_h) / 2)
-    self:_paintBookCover(bb, entry, cover_x, cover_y, cover_w, cover_h, "large")
+    -- The cover bleeds flush to the card's top, left, and bottom edges and
+    -- keeps the artwork's own aspect, so the art never letterboxes; the 2:3
+    -- placeholder box is only used when no artwork exists.
+    local cover = self:_cachedCoverFor(entry, cover_h * 2, cover_h)
+    local cover_w
+    if cover then
+        cover_w = cover.w
+        bb:blitFrom(cover.bb, x, y + math.floor((h - cover.h) / 2), 0, 0, cover.w, cover.h)
+        self:_paintRectBorder(bb, x, y, cover_w, cover_h, Blitbuffer.COLOR_LIGHT_GRAY)
+    else
+        cover_w = math.floor(cover_h / GridLayout.cover_ratio + 0.5)
+        self:_paintBookCover(bb, entry, x, y, cover_w, cover_h, "large")
+    end
 
     local menu_size = self:_iconSize()
-    local text_x = cover_x + cover_w + self:_px(Space.xl)
+    local text_x = x + cover_w + self:_px(Space.xl)
     local menu_x = x + w - pad - menu_size
     local text_w = math.max(1, menu_x - self:_px(Space.m) - text_x)
+    local text_top = y + pad
 
     local title_metrics = self:_textBoxLineMetrics(
         FontTokens.serif_safe,
         TypeScale.hero_title,
         BookTextTokens.title_line_height,
         BookTextTokens.title_max_lines)
-    local title_size = self:_paintTextBox(bb, self:_entryTitle(entry) or _("Untitled"), text_x, cover_y, text_w, {
+    local title_size = self:_paintTextBox(bb, self:_entryTitle(entry) or _("Untitled"), text_x, text_top, text_w, {
         face = FontTokens.serif_safe,
         size = TypeScale.hero_title,
         height = math.min(title_metrics.h, math.max(1, h - pad * 2)),
@@ -1395,7 +1406,7 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
         line_height = BookTextTokens.title_line_height,
     })
 
-    local cursor_y = cover_y + title_size.h
+    local cursor_y = text_top + title_size.h
     local author = self:_entryAuthor(entry)
     if author and author ~= "" then
         local author_size = self:_paintText(bb, author, text_x, cursor_y + self:_px(Space.s), {
@@ -1407,7 +1418,7 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
         cursor_y = cursor_y + self:_px(Space.s) + author_size.h
     end
 
-    local bar_y = cover_y + cover_h - math.max(1, self:_px(Space.xs))
+    local bar_y = y + h - pad - math.max(1, self:_px(Space.xs))
     local meta_top = bar_y
     local summary = self:_progressSummary(entry)
     if summary ~= "" then
