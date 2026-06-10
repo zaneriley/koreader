@@ -35,6 +35,7 @@ end
 function Bookshelf:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    self:_scheduleLibraryHome()
 end
 
 function Bookshelf:addToMainMenu(menu_items)
@@ -59,6 +60,98 @@ function Bookshelf:_isLibraryHome()
         return home_view == "library"
     end
     return (self:_readSetting("start_with") or "library") == "library"
+end
+
+function Bookshelf:_isReaderHost()
+    return self.ui and self.ui.document ~= nil
+end
+
+function Bookshelf:onReaderReady()
+    if not self:_isReaderHost() then
+        return
+    end
+    local preset_id = self:_readSetting("bookshelf_auto_apply_reading_preset")
+    if type(preset_id) ~= "string" or preset_id == "" then
+        return
+    end
+    UIManager:nextTick(function()
+        self:_applyReadingPreset(preset_id)
+    end)
+end
+
+function Bookshelf:_applyReadingPreset(preset_id)
+    local ok, ReadingPreset = pcall(dofile, self.path .. "/readingpreset.lua")
+    if not ok then
+        logger.warn("Bookshelf reading preset loader failed:", ReadingPreset)
+        return false
+    end
+
+    local derived_ok, result = pcall(ReadingPreset.deriveProfile, {
+        preset_id = preset_id,
+    })
+    if not derived_ok then
+        logger.warn("Bookshelf reading preset derivation failed:", result)
+        return false
+    end
+    if result.result == "fail" then
+        logger.warn("Bookshelf reading preset did not meet readable measure:", result.failure_owner)
+        return false
+    end
+
+    -- An auto-applied preset should not stack a toast per changed setting.
+    -- Dispatcher:execute overrides the notify source itself, so the only
+    -- surviving lever is the user-facing source mask, narrowed transiently;
+    -- SOURCE_ALWAYS_SHOW notifications still pass.
+    local saved_mask = G_reader_settings:readSetting("notification_sources_to_show_mask")
+    G_reader_settings:saveSetting("notification_sources_to_show_mask", 0)
+    local exec_ok, exec_err = pcall(Dispatcher.execute, Dispatcher, result.profile)
+    if saved_mask ~= nil then
+        G_reader_settings:saveSetting("notification_sources_to_show_mask", saved_mask)
+    else
+        G_reader_settings:delSetting("notification_sources_to_show_mask")
+    end
+    if not exec_ok then
+        logger.warn("Bookshelf reading preset dispatch failed:", exec_err)
+        return false
+    end
+
+    if self.ui and self.ui.styletweak and result.css_tweak then
+        self.ui.styletweak.tweaks_by_id["bookshelf_preset_tweak"] = {
+            id = "bookshelf_preset_tweak",
+            priority = 999,
+
+            css = result.css_tweak,
+        }
+        self.ui.styletweak.doc_tweaks["bookshelf_preset_tweak"] = true
+        self.ui.styletweak:updateCssText(true)
+        logger.info("Bookshelf injected CSS style tweak to override publisher formatting.")
+    end
+
+    logger.info(
+        "Bookshelf applied reading preset:",
+        preset_id,
+        "font:",
+        result.profile.set_font,
+        "estimated_cpl:",
+        result.candidate and result.candidate.estimated_cpl
+    )
+    return true
+end
+
+function Bookshelf:_scheduleLibraryHome()
+    if self._library_home_scheduled or self:_isReaderHost() or not self:_isLibraryHome() then
+        return
+    end
+    if not self.ui or type(self.ui.registerPostInitCallback) ~= "function" then
+        return
+    end
+
+    self._library_home_scheduled = true
+    self.ui:registerPostInitCallback(function()
+        UIManager:nextTick(function()
+            self:onShowLibrary()
+        end)
+    end)
 end
 
 function Bookshelf:getProvider()
