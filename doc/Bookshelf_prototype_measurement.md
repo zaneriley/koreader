@@ -220,3 +220,63 @@ Observed on 2026-05-06: the seeded corpus contains 52 files. KOReader metadata
 extraction produced 52 bookinfo rows and 45 cached cover bitmaps, leaving a useful
 mix of real covers and intentional placeholder/no-cover cases for visual QA.
 Captured emulator screenshots live under `.tmp/bookshelf-sample-library-*.png`.
+
+## Harness Operating Model (2026-06-10)
+
+The container start script supervises all four services (Xvfb, x11vnc,
+websockify, KOReader) in relaunch loops with stale X-lock cleanup, so the
+container never exits and its published port registers with the host exactly
+once. Do not recreate the container for code changes:
+
+- Plugin module changes (`ui.lua`, `provider.lua`, `gridlayout.lua`, etc.)
+  apply on the next library open; they are `dofile`d live via the bind mount.
+- `main.lua` changes need a KOReader process restart only (the plugin loader
+  caches it per process): `docker exec <container> pkill luajit` relaunches
+  KOReader in seconds with the viewer session still connected.
+- Recreate the container only for image or mount changes.
+
+Headless captures: install imagemagick inside the container (ephemeral), then
+`docker exec -e DISPLAY=:99 <container> import -window root /tmp/shot.png`.
+
+Unit specs run inside the container via the busted farm script (rebuilds its
+symlink workspace after container recreation):
+
+```sh
+.tmp/run-bookshelf-specs.sh                 # all bookshelf_*_spec files
+.tmp/run-bookshelf-specs.sh bookshelf_ui_spec.lua
+```
+
+Note: `./kodev test` cannot run in this setup (it re-resolves CMake against
+the original build path and fails on permission-preserving copies through the
+VM mount), and a missing `spec/front` link makes the meson runner report
+success with zero tests — always confirm the printed test count.
+
+## Fonts
+
+KOReader resolves user fonts from its data-dir `fonts/` directory on every
+platform; the bookshelf reading-preset work selects faces through a candidate
+chain that queries installed faces at runtime and falls back to the bundled
+Noto family when a preferred face is absent. Font binaries are intentionally
+not part of this repository or any upstream patch: the upstream-facing
+instruction is "install your preferred text face into `koreader/fonts/`", and
+preset derivation adapts to whatever is present. For QA, drop TTFs into the
+emulator's `fonts/` directory (on the build volume, so they persist) and
+restart the KOReader process.
+
+## Upstreaming Shape
+
+The prototype decomposes into independent upstream candidates, in submission
+order:
+
+1. ReaderFooter three-zone status bar layout: standalone, no bookshelf
+   dependencies.
+2. The Library home: `bookshelf.koplugin` plus minimal core seams, offered as
+   an opt-in home-view setting (the file manager remains the default), with
+   the spec suite and this measurement/QA evidence attached.
+3. The reading-presets engine: derives typography (font size, margins) from a
+   characters-per-line target measured with the actual installed font, with
+   graceful font-candidate fallback. Opinionated preset values ship as
+   configurable defaults, not fixed policy.
+
+Fonts and personal configuration bundles are out of scope for all of the
+above (see Fonts).
