@@ -517,30 +517,24 @@ describe("Bookshelf UI module", function()
         assert.equals(568, header_calls[1].w)
     end)
 
-    it("scales the continue card to the height allocated by the shelf stack", function()
+    it("paints the continue entry as a horizontal card capped at its natural height", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
-        local grid_scale
-        local grid_card_h
+        local card_call
         local fake = setmetatable({
-            shelf_scale = 2,
+            shelf_scale = 1,
             _continueEntry = function()
                 return { title = "Alice" }
             end,
-            _bookCardMetrics = function(_, _, scale)
+            _bookCardMetrics = function()
                 return {
                     outer = 16,
-                    card_h = math.floor(284 * scale + 0.5),
+                    gutter = 16,
                 }
             end,
             _paintCategoryHeader = function() end,
-            _paintGridCards = function(_, _, _, _, _, _, _, _, _, options)
-                grid_scale = options.scale
-                grid_card_h = math.floor(284 * grid_scale + 0.5)
-                return {
-                    metrics = {
-                        card_h = grid_card_h,
-                    },
-                }
+            _paintContinueCard = function(_, _, _, x, y, w, h)
+                card_call = { x = x, y = y, w = w, h = h }
+                return h
             end,
             _continue = function() end,
             _px = function(_, value)
@@ -548,10 +542,31 @@ describe("Bookshelf UI module", function()
             end,
         }, { __index = LibraryUI })
 
-        LibraryUI._paintContinueShelf(fake, {}, 0, 100, 600, 230)
+        local shelf_h = LibraryUI._paintContinueShelf(fake, {}, 0, 100, 600, 360)
 
-        assert.equals(188, grid_card_h)
-        assert.is_true(math.floor(284 * (grid_scale + 0.001) + 0.5) > 188)
+        -- card natural height: the large-card cover (148du * 3/2) + 16du padding * 2 = 254
+        assert.equals(254, card_call.h)
+        assert.equals(16, card_call.x)
+        assert.equals(568, card_call.w)
+        assert.equals(32 + 12 + 254, shelf_h)
+    end)
+
+    it("uses the horizontal card height for the continue body when an entry exists", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local fake = setmetatable({
+            shelf_scale = 1,
+            _continueEntry = function()
+                return { title = "Alice" }
+            end,
+            _bookCardMetrics = function()
+                return { gutter = 16 }
+            end,
+            _px = function(_, value)
+                return value
+            end,
+        }, { __index = LibraryUI })
+
+        assert.equals(254, LibraryUI._continueShelfBodyHeight(fake))
     end)
 
     it("uses shared layout spacing tokens for shelf positioning", function()
@@ -563,15 +578,15 @@ describe("Bookshelf UI module", function()
             end,
         }, { __index = LibraryUI })
 
-        assert.equals(30, LibraryUI._sectionHeaderHeight(fake))
+        assert.equals(32, LibraryUI._sectionHeaderHeight(fake))
         assert.equals(12, LibraryUI._sectionGap(fake))
         assert.equals(24, LibraryUI._titleToShelfGap(fake))
-        assert.equals(28, LibraryUI._continueToLowerGap(fake))
+        assert.equals(32, LibraryUI._continueToLowerGap(fake))
         assert.equals(32, LibraryUI._lowerShelfGap(fake))
         assert.equals(16, LibraryUI._lowerBottomMargin(fake))
     end)
 
-    it("bottom anchors the lower shelf stack below the continue region", function()
+    it("flows the lower shelves below continue reading and gives all books the slack", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local fake = setmetatable({
             shelf_scale = 1,
@@ -586,15 +601,15 @@ describe("Bookshelf UI module", function()
         local layout = LibraryUI._shelfStackLayout(fake, 200, 1300)
 
         assert.equals(200, layout.continue_y)
-        assert.equals(326, layout.continue_h)
-        assert.equals(326, layout.recent_h)
-        assert.equals(256, layout.all_h)
-        assert.equals(614, layout.lower_stack_h)
-        assert.equals(670, layout.recent_y)
-        assert.equals(1028, layout.all_y)
+        assert.equals(328, layout.continue_h)
+        assert.equals(328, layout.recent_h)
+        assert.equals(560, layout.recent_y)
+        assert.equals(layout.continue_y + layout.continue_h + layout.continue_gap, layout.recent_y)
+        assert.equals(920, layout.all_y)
+        assert.equals(364, layout.all_h)
+        assert.equals(724, layout.lower_stack_h)
         assert.equals(1284, layout.all_y + layout.all_h)
         assert.equals(1300, layout.all_y + layout.all_h + layout.bottom_margin)
-        assert.is_true(layout.pinned)
         assert.is_false(layout.continue_shrunk)
     end)
 
@@ -612,12 +627,11 @@ describe("Bookshelf UI module", function()
 
         local layout = LibraryUI._shelfStackLayout(fake, 200, 1130)
 
-        assert.equals(272, layout.continue_h)
-        assert.equals(500, layout.recent_y)
-        assert.equals(858, layout.all_y)
+        assert.equals(264, layout.continue_h)
+        assert.equals(496, layout.recent_y)
+        assert.equals(856, layout.all_y)
         assert.equals(1114, layout.all_y + layout.all_h)
         assert.equals(1130, layout.all_y + layout.all_h + layout.bottom_margin)
-        assert.is_true(layout.pinned)
         assert.is_true(layout.continue_shrunk)
     end)
 
@@ -635,10 +649,9 @@ describe("Bookshelf UI module", function()
 
         local layout = LibraryUI._shelfStackLayout(fake, 200, 1000)
 
-        assert.equals(158, layout.continue_h)
-        assert.equals(386, layout.recent_y)
+        assert.equals(160, layout.continue_h)
+        assert.equals(392, layout.recent_y)
         assert.equals(layout.continue_y + layout.continue_h + layout.continue_gap, layout.recent_y)
-        assert.is_false(layout.pinned)
         assert.is_true(layout.continue_shrunk)
     end)
 
@@ -705,7 +718,7 @@ describe("Bookshelf UI module", function()
         assert.equals("Recent", header_calls[1].controls[1].value)
     end)
 
-    it("keeps all books at dense small-card scale while clipping overflow", function()
+    it("pages all books as a peeking rail that signals more books", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local card_calls = {}
         local fake = setmetatable({
@@ -735,18 +748,24 @@ describe("Bookshelf UI module", function()
 
         LibraryUI._paintAllBooks(fake, {}, 0, 100, 650, 260)
 
+        -- 650 wide fits 5 full small cards; the 6th is deliberately sliced at
+        -- the edge as the swipe affordance, and the page steps by 5.
         assert.equals(6, #card_calls)
         assert.equals(104, card_calls[1].slot.w)
         assert.equals(1, card_calls[1].scale)
+        assert.equals(16, card_calls[1].slot.x)
         assert.equals(616, card_calls[6].slot.x)
         assert.is_true(card_calls[6].slot.x + card_calls[6].slot.w > 650)
+        assert.equals(1, #fake.rail_regions)
+        assert.equals("all_books", fake.rail_regions[1].id)
+        assert.equals(5, fake.rail_regions[1].step_count)
     end)
 
     it("pages recently added as a snapped carousel rail", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local entries = {}
         local card_calls = {}
-        for i = 1, 6 do
+        for i = 1, 10 do
             entries[i] = { title = "Book " .. tostring(i) }
         end
         local text_stack = {
@@ -784,15 +803,15 @@ describe("Bookshelf UI module", function()
 
         LibraryUI._paintRecentlyAdded(fake, {}, 0, 100, 746)
 
-        assert.equals(2, #card_calls)
-        assert.equals("Book 5", card_calls[1].entry.title)
-        assert.equals("recent_5", card_calls[1].id)
-        assert.equals(100 + 30 + 12, card_calls[1].clip_rect.y)
+        assert.equals(4, #card_calls)
+        assert.equals("Book 7", card_calls[1].entry.title)
+        assert.equals("recent_7", card_calls[1].id)
+        assert.equals(100 + 32 + 12, card_calls[1].clip_rect.y)
         assert.equals(1, #fake.rail_regions)
         assert.equals("recently_added", fake.rail_regions[1].id)
         assert.equals(2, fake.rail_regions[1].page)
         assert.equals(2, fake.rail_regions[1].max_page)
-        assert.equals(4, fake.rail_regions[1].step_count)
+        assert.equals(6, fake.rail_regions[1].step_count)
     end)
 
     it("routes horizontal swipes to the rail under the gesture start point", function()

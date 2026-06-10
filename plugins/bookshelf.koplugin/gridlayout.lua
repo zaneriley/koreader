@@ -3,6 +3,9 @@ local GridLayout = {}
 local COVER_RATIO_NUM = 3
 local COVER_RATIO_DEN = 2
 
+-- Cover height / cover width: the one shape the whole shelf system repeats.
+GridLayout.cover_ratio = COVER_RATIO_NUM / COVER_RATIO_DEN
+
 local SPECS = {
     large = {
         card_w = 148,
@@ -34,9 +37,9 @@ local SPECS = {
         outer = 16,
         gutter = 16,
         row_gap = 24,
-        max_cols = 5,
-        title_size = 11,
-        metadata_size = 9,
+        max_cols = 8,
+        title_size = 12,
+        metadata_size = 10,
     },
 }
 

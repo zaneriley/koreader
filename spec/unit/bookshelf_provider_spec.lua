@@ -178,6 +178,19 @@ describe("Bookshelf downloaded-book provider", function()
         assert.equals("Local", records[1].authors)
     end)
 
+    it("joins newline-separated authors with a comma", function()
+        local records = Provider.recordsFromRows({
+            {
+                file = "/downloads/grimms.epub",
+                doc_props = { title = "Grimms' Fairy Tales", authors = "Jacob Grimm\nWilhelm Grimm" },
+                book_info = { been_opened = true, status = "reading" },
+                attributes = { mode = "file" },
+            },
+        }, no_probe_opts())
+
+        assert.equals("Jacob Grimm, Wilhelm Grimm", records[1].authors)
+    end)
+
     it("handles large synthetic downloaded shelves", function()
         for _, size in ipairs({ 0, 1, 12, 100, 1000, 5000 }) do
             local records = Provider.recordsFromRows(synthetic_rows(size), no_probe_opts())

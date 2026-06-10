@@ -149,6 +149,15 @@ local function firstPresent(...)
     end
 end
 
+-- KOReader stores multiple authors newline-separated; join them before
+-- asString collapses the newline into a plain space.
+local function joinAuthorLines(value)
+    if type(value) ~= "string" then
+        return value
+    end
+    return (value:gsub("%s*\n%s*", ", "))
+end
+
 function DownloadedBookProvider.getStableId(file)
     return "downloaded:" .. tostring(file or "")
 end
@@ -171,7 +180,9 @@ function DownloadedBookProvider.recordFromRow(row, opts)
         filenameWithoutSuffix(file),
         file
     )
-    local authors = firstPresent(doc_props.authors, type(row) == "table" and row.authors)
+    local authors = firstPresent(
+        joinAuthorLines(doc_props.authors),
+        type(row) == "table" and joinAuthorLines(row.authors))
     local series = firstPresent(doc_props.series)
     local exists
     if type(row) == "table" and row.select_enabled ~= nil then
