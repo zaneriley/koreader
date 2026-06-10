@@ -35,6 +35,11 @@ local Presets = {
     ["literary-latin"] = {
         id = "literary-latin",
         profile_name = "Bookshelf Literary Latin",
+        -- Auto-apply is gated on the book's language: this preset's measure
+        -- targets, sample text, and CSS repair are Latin assumptions and must
+        -- never touch CJK books (deliberate 字取り title setting, different
+        -- line-length norms, vertical writing).
+        languages = { "en" },
         font_pack_id = "source-serif-4-smtext",
         target_cpl = 64,
         preferred_cpl = { min = 62, max = 68 },
@@ -224,6 +229,47 @@ function ReadingPreset.deriveProfile(opts)
     }
 
     return result
+end
+
+function ReadingPreset.appliesToLanguage(preset, language)
+    local languages = type(preset) == "table" and preset.languages
+    if type(languages) ~= "table" then
+        return false
+    end
+    if type(language) ~= "string" or language == "" then
+        return false
+    end
+    language = language:lower()
+    for _, candidate in ipairs(languages) do
+        local prefix = tostring(candidate):lower()
+        if language == prefix or language:sub(1, #prefix + 1) == prefix .. "-" then
+            return true
+        end
+    end
+    return false
+end
+
+-- Project Gutenberg's template CSS letterspaces headings (0.12em), inflates
+-- h1 to 300%, and paints background slabs that render as gray smudges on
+-- e-ink. Repair that noise for PG-identified books only — carefully typeset
+-- books are never touched, and the result stays a per-book reversible tweak.
+function ReadingPreset.publisherRepairCss(doc_props)
+    local identifiers = type(doc_props) == "table" and tostring(doc_props.identifiers or "") or ""
+    if not identifiers:lower():find("gutenberg%.org") then
+        return nil
+    end
+    return table.concat({
+        "h1, h2, h3, h4, h5, h6 {",
+        "    letter-spacing: normal !important;",
+        "    word-spacing: normal !important;",
+        "}",
+        "h1 {",
+        "    font-size: 200% !important;",
+        "}",
+        "body, div, p, blockquote, pre {",
+        "    background-color: transparent !important;",
+        "}",
+    }, "\n")
 end
 
 ReadingPreset.presets = Presets

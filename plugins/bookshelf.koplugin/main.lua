@@ -86,6 +86,18 @@ function Bookshelf:_applyReadingPreset(preset_id)
         return false
     end
 
+    local doc_props = self.ui and self.ui.doc_props or {}
+    local preset_ok, preset = pcall(ReadingPreset.getPreset, preset_id)
+    if not preset_ok then
+        logger.warn("Bookshelf reading preset unknown:", preset_id)
+        return false
+    end
+    if not ReadingPreset.appliesToLanguage(preset, doc_props.language) then
+        logger.info("Bookshelf reading preset skipped: book language",
+            tostring(doc_props.language), "is outside the preset's scope")
+        return false
+    end
+
     local derived_ok, result = pcall(ReadingPreset.deriveProfile, {
         preset_id = preset_id,
     })
@@ -113,6 +125,16 @@ function Bookshelf:_applyReadingPreset(preset_id)
     if not exec_ok then
         logger.warn("Bookshelf reading preset dispatch failed:", exec_err)
         return false
+    end
+
+    -- ui.doc_props whitelists display fields; the raw engine props with the
+    -- publisher identifiers live in the book's saved doc_props setting.
+    local raw_props = self.ui and self.ui.doc_settings
+        and self.ui.doc_settings:readSetting("doc_props") or {}
+    local repair_css = ReadingPreset.publisherRepairCss(raw_props)
+    if repair_css then
+        result.css_tweak = (result.css_tweak and (result.css_tweak .. "\n") or "") .. repair_css
+        logger.info("Bookshelf applied publisher template repair (Project Gutenberg).")
     end
 
     if self.ui and self.ui.styletweak and result.css_tweak then
