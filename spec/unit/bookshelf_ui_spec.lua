@@ -685,6 +685,27 @@ describe("Bookshelf UI module", function()
         assert.equals(150 + 24, title_x)
     end)
 
+    it("memoizes the continue entry within one paint cycle", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local provider_calls = 0
+        local fake = setmetatable({
+            _paint_cache = {},
+            _providerEntry = function()
+                provider_calls = provider_calls + 1
+                return { file = "/downloads/book.epub", title = "Book" }
+            end,
+            _normalizeContinueEntry = function(_, entry)
+                return entry
+            end,
+        }, { __index = LibraryUI })
+
+        local first = LibraryUI._continueEntry(fake)
+        local second = LibraryUI._continueEntry(fake)
+
+        assert.equals(1, provider_calls)
+        assert.equals(first, second)
+    end)
+
     it("skips the progress block for a book with no reading state", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local bar_calls = 0

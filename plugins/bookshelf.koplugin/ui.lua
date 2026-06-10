@@ -438,9 +438,19 @@ function LibraryUI:_lastFileEntry()
 end
 
 function LibraryUI:_continueEntry()
-    return self:_normalizeContinueEntry(self:_providerEntry("getContinue", "getContinueItem", "getLastReading"))
+    -- Memoized per paint cycle: getContinue reloads ReadHistory and parses
+    -- the book's sidecar, and one paint asks for this entry several times.
+    local cache = self._paint_cache
+    if cache and cache.continue_entry ~= nil then
+        return cache.continue_entry or nil
+    end
+    local entry = self:_normalizeContinueEntry(self:_providerEntry("getContinue", "getContinueItem", "getLastReading"))
         or self:_currentDocumentEntry()
         or self:_lastFileEntry()
+    if cache then
+        cache.continue_entry = entry or false
+    end
+    return entry
 end
 
 function LibraryUI:_downloadedEntries()
@@ -461,6 +471,10 @@ function LibraryUI:_uniqueEntries(entries)
 end
 
 function LibraryUI:_libraryEntries()
+    local cache = self._paint_cache
+    if cache and cache.library_entries then
+        return cache.library_entries
+    end
     local entries = {}
     local continue = self:_continueEntry()
     if continue then
@@ -469,7 +483,11 @@ function LibraryUI:_libraryEntries()
     for _, entry in ipairs(self:_downloadedEntries()) do
         table.insert(entries, entry)
     end
-    return self:_uniqueEntries(entries)
+    entries = self:_uniqueEntries(entries)
+    if cache then
+        cache.library_entries = entries
+    end
+    return entries
 end
 
 function LibraryUI:_recentlyAddedEntries()
@@ -1073,6 +1091,12 @@ end
 
 function LibraryUI:_scheduleCoverCacheRetry()
     if self._cover_cache_retry_scheduled then
+        return
+    end
+    -- A stuck extraction must not repaint forever; covers that finish later
+    -- still land on any natural repaint.
+    self._cover_cache_retries = (self._cover_cache_retries or 0) + 1
+    if self._cover_cache_retries > 10 then
         return
     end
     self._cover_cache_retry_scheduled = true
@@ -1845,6 +1869,9 @@ function LibraryUI:paintTo(bb, x, y)
     self.dimen.h = Screen:getHeight()
     self.zones = {}
     self.rail_regions = {}
+    -- Provider lookups (history reload, sidecar reads, file stats) run once
+    -- per paint; tap callbacks reuse what the last paint displayed.
+    self._paint_cache = {}
 
     local w = self.dimen.w
     local h = self.dimen.h
