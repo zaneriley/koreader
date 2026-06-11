@@ -92,7 +92,7 @@ def download_books(library: Path) -> None:
         target = library / book.filename
         if target.exists() and target.stat().st_size > 0:
             continue
-        print(f"download {book.source_url} -> {target.relative_to(ROOT)}")
+        print(f"download {book.source_url} -> {display_path(target)}")
         run([
             "curl",
             "--fail",
@@ -160,7 +160,7 @@ def upsert_lua_setting(text: str, key: str, value: str) -> str:
 
 def configure_settings(settings: Path, runtime_library: str) -> None:
     if not settings.exists():
-        print(f"skip settings update; missing {settings.relative_to(ROOT)}")
+        print(f"skip settings update; missing {display_path(settings)}")
         return
 
     text = settings.read_text(encoding="utf-8")

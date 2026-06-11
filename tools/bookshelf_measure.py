@@ -156,6 +156,8 @@ def append_samples(path, samples):
 
 def read_samples(path):
     path = Path(path)
+    if not path.is_file():
+        raise MeasurementError(f"samples file does not exist: {path}")
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:

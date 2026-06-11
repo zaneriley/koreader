@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,6 +69,25 @@ class BookshelfMeasureToolTest(unittest.TestCase):
 
             self.assertEqual("12.500", read_back[0]["elapsed_ms"])
             self.assertEqual("comma, newline\nquote\"", read_back[1]["notes"])
+
+    def test_read_samples_missing_file_raises_measurement_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "missing.csv"
+
+            with self.assertRaisesRegex(bookshelf_measure.MeasurementError, "does not exist"):
+                bookshelf_measure.read_samples(path)
+
+    def test_main_summarize_missing_samples_returns_clean_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "missing.csv"
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                code = bookshelf_measure.main(["summarize", "--samples", str(path)])
+
+            self.assertEqual(2, code)
+            self.assertIn("bookshelf_measure.py: error:", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_invalid_scenario_is_rejected(self):
         bad_sample = sample(10)
