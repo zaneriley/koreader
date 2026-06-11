@@ -1044,7 +1044,9 @@ function LibraryUI:_paintRectBorder(bb, x, y, w, h, color)
 end
 
 function LibraryUI:_paintPressedRect(bb, id, x, y, w, h)
-    if self.pressed_zone_id == id then
+    -- nil == nil must not count as "pressed": headers painted without an
+    -- id (Discover rails) would otherwise show a permanent pressed band
+    if id and self.pressed_zone_id == id then
         bb:paintRect(x, y, w, h, Blitbuffer.COLOR_GRAY_E or Blitbuffer.COLOR_LIGHT_GRAY)
     end
 end

@@ -276,6 +276,32 @@ describe("Bookshelf UI module", function()
         assert.equals("Document", text_calls[#text_calls])
     end)
 
+    it("paints the pressed band only for a matching zone id", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local rects = {}
+        local fake = setmetatable({
+            shelf_scale = 1,
+        }, { __index = LibraryUI })
+        local bb = {
+            paintRect = function(_, x, y, w, h, color)
+                table.insert(rects, { x = x, y = y, w = w, h = h, color = color })
+            end,
+        }
+
+        -- a header painted without an id (Discover rails) is never "pressed"
+        LibraryUI._paintPressedRect(fake, bb, nil, 0, 0, 100, 34)
+        assert.equals(0, #rects)
+
+        -- nil id still never matches while some other zone is pressed
+        fake.pressed_zone_id = "continue_header"
+        LibraryUI._paintPressedRect(fake, bb, nil, 0, 0, 100, 34)
+        assert.equals(0, #rects)
+
+        -- the matching id keeps its press feedback
+        LibraryUI._paintPressedRect(fake, bb, "continue_header", 0, 0, 100, 34)
+        assert.equals(1, #rects)
+    end)
+
     it("paints cached cover artwork instead of generated placeholder text", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local text_calls = 0
