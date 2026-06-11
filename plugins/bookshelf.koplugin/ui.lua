@@ -517,6 +517,165 @@ function LibraryUI:_showInfo(text)
     })
 end
 
+function LibraryUI:_searchLibraryEntries(query)
+    query = type(query) == "string" and query:lower():gsub("^%s+", ""):gsub("%s+$", "") or ""
+    if query == "" then
+        return {}
+    end
+    local results = {}
+    for _, entry in ipairs(self:_libraryEntries()) do
+        local title = (self:_entryTitle(entry) or ""):lower()
+        local author = (self:_entryAuthor(entry) or ""):lower()
+        if title:find(query, 1, true) or author:find(query, 1, true) then
+            table.insert(results, entry)
+        end
+    end
+    return results
+end
+
+function LibraryUI:_showLibrarySearch()
+    -- The header search icon searches the LIBRARY (device first, catalog
+    -- async), never the dictionary; dictionary lookup stays on its nav tab.
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Search library"),
+        input = "",
+        buttons = {{
+            {
+                text = _("Cancel"),
+                id = "close",
+                callback = function()
+                    UIManager:close(dialog)
+                end,
+            },
+            {
+                text = _("Search"),
+                is_enter_default = true,
+                callback = function()
+                    local query = dialog:getInputText()
+                    UIManager:close(dialog)
+                    if type(query) == "string" and query:gsub("%s", "") ~= "" then
+                        self:_runLibrarySearch(query)
+                    end
+                end,
+            },
+        }},
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function LibraryUI:_runLibrarySearch(query)
+    local Menu = require("ui/widget/menu")
+    local NetworkMgr = require("ui/network/manager")
+    local CatalogSearch = dofile(plugin_dir .. "/catalogsearch.lua")
+    self._catalog_search = self._catalog_search or CatalogSearch.new()
+    local cs = self._catalog_search
+    local server = cs:available() and cs:getServer() or nil
+
+    -- Device results paint instantly; the catalog section fills in after.
+    local unknown_label = _("Unknown")
+    local item_table = {}
+    for _, entry in ipairs(self:_searchLibraryEntries(query)) do
+        table.insert(item_table, {
+            text = self:_entryTitle(entry) or unknown_label,
+            mandatory = self:_entryAuthor(entry),
+            entry = entry,
+        })
+    end
+    if #item_table == 0 then
+        table.insert(item_table, {
+            text = _("No matches on this device"),
+            dim = true,
+            select_enabled = false,
+        })
+    end
+    if server then
+        table.insert(item_table, {
+            text = _("In your library"),
+            bold = true,
+            select_enabled = false,
+        })
+        table.insert(item_table, {
+            text = _("Searching your library…"),
+            dim = true,
+            select_enabled = false,
+        })
+    end
+
+    local menu, pending
+    menu = Menu:new{
+        title = T(_("Search: %1"), query),
+        item_table = item_table,
+        covers_fullscreen = true,
+        is_borderless = true,
+        is_popout = false,
+        title_bar_fm_style = true,
+        onMenuChoice = function(_menu, item)
+            if item.entry then
+                self:_openEntry(item.entry)
+            elseif item.remote then
+                UIManager:show(InfoMessage:new{ text = _("Downloading…"), timeout = 1 })
+                UIManager:scheduleIn(1, function()
+                    local path, err = cs:download(server, item.remote)
+                    if path then
+                        if not self._closed then
+                            self:_triggerBackgroundExtraction()
+                            UIManager:setDirty(self, "ui", self.dimen)
+                        end
+                    else
+                        self:_showInfo(T(_("Download failed: %1"), err))
+                    end
+                end)
+            end
+        end,
+        close_callback = function()
+            menu._closed = true
+            if pending then
+                UIManager:unschedule(pending)
+            end
+            UIManager:close(menu)
+        end,
+    }
+    UIManager:show(menu)
+
+    if server then
+        NetworkMgr:runWhenConnected(function()
+            pending = UIManager:tickAfterNext(function()
+                -- the menu's local rows have painted by now; the fetch below
+                -- blocks briefly (3s connect / 5s total caps)
+                if menu._closed or not UIManager:isWidgetShown(menu) then
+                    return
+                end
+                local results, err = cs:search(server, query)
+                if menu._closed then
+                    return -- taps were queued during the block
+                end
+                local download_label = _("Download")
+                local items = menu.item_table
+                items[#items] = nil -- the "Searching…" placeholder is last by construction
+                if results and #results > 0 then
+                    for _, row in ipairs(results) do
+                        table.insert(items, {
+                            text = row.text or row.title,
+                            mandatory = download_label,
+                            remote = row,
+                        })
+                    end
+                else
+                    table.insert(items, {
+                        text = err and _("Library unavailable") or _("No matches in your library"),
+                        dim = true,
+                        select_enabled = false,
+                    })
+                end
+                menu:switchItemTable(nil, items, -1)
+            end)
+        end)
+    end
+end
+
 function LibraryUI:_showDictionaryLookup()
     local dictionary = self:_dictionary()
     if dictionary and type(dictionary.onShowDictionaryLookup) == "function" then
@@ -911,7 +1070,7 @@ function LibraryUI:_paintHeader(bb, x, y, w)
     end)
     right = right - action - gap
     self:_paintHeaderAction(bb, "search", "search", right, y + self:_px(4), action, function()
-        self:_showDictionaryLookup()
+        self:_showLibrarySearch()
     end)
 end
 

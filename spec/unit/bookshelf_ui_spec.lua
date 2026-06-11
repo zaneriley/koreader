@@ -749,6 +749,27 @@ describe("Bookshelf UI module", function()
         assert.equals(0, bar_calls)
     end)
 
+    it("searches device library entries by title and author, case-insensitively", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local fake = setmetatable({
+            _libraryEntries = function()
+                return {
+                    { display_title = "Difficult Conversations", authors = "Sheila Heen" },
+                    { display_title = "Peopleware", authors = "Tom DeMarco" },
+                    { display_title = "陰翳礼讃", authors = "谷崎潤一郎" },
+                }
+            end,
+        }, { __index = LibraryUI })
+
+        assert.equals(1, #LibraryUI._searchLibraryEntries(fake, "conversations"))
+        assert.equals(1, #LibraryUI._searchLibraryEntries(fake, "HEEN"))
+        assert.equals(1, #LibraryUI._searchLibraryEntries(fake, "ware"))
+        assert.equals(1, #LibraryUI._searchLibraryEntries(fake, "礼讃"))
+        assert.equals(0, #LibraryUI._searchLibraryEntries(fake, ""))
+        assert.equals(0, #LibraryUI._searchLibraryEntries(fake, "   "))
+        assert.equals(0, #LibraryUI._searchLibraryEntries(fake, "zzz"))
+    end)
+
     it("opens the OPDS catalog and refreshes the shelf when it closes", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local UIManager = require("ui/uimanager")
