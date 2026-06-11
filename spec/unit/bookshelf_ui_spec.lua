@@ -13,6 +13,56 @@ describe("Bookshelf UI module", function()
         assert.is_function(LibraryUI.new)
     end)
 
+    it("passes cover specs into background extraction", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local UIManager = require("ui/uimanager")
+        local old_next_tick = UIManager.nextTick
+        finally(function()
+            UIManager.nextTick = old_next_tick
+        end)
+        UIManager.nextTick = function(_, callback)
+            callback()
+        end
+
+        local cover_specs = { max_cover_w = 320, max_cover_h = 480 }
+        local checked_specs
+        local extracted
+        local manager = {
+            getBookInfo = function()
+                return { cover_fetched = true, has_cover = true }
+            end,
+            isCachedCoverInvalid = function(_, specs)
+                checked_specs = specs
+                return true
+            end,
+            extractInBackground = function(_, entries)
+                extracted = entries
+                return true
+            end,
+        }
+        local fake = setmetatable({
+            _bookInfoManager = function()
+                return manager
+            end,
+            _coverSpecs = function()
+                return cover_specs
+            end,
+            _libraryEntries = function()
+                return { { file = "/downloads/book.epub" } }
+            end,
+            _entryFile = function(_, entry)
+                return entry.file
+            end,
+            _scheduleCoverCacheRetry = function() end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._triggerBackgroundExtraction(fake)
+
+        assert.equals(cover_specs, checked_specs)
+        assert.equals(cover_specs, extracted[1].cover_specs)
+        assert.equals("/downloads/book.epub", extracted[1].filepath)
+    end)
+
     it("does not draw a border around book card text", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local GridLayout = dofile("plugins/bookshelf.koplugin/gridlayout.lua")
@@ -685,11 +735,10 @@ describe("Bookshelf UI module", function()
         assert.equals(150 + 24, title_x)
     end)
 
-    it("memoizes the continue entry within one paint cycle", function()
+    it("memoizes the continue entry until the library cache is invalidated", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local provider_calls = 0
         local fake = setmetatable({
-            _paint_cache = {},
             _providerEntry = function()
                 provider_calls = provider_calls + 1
                 return { file = "/downloads/book.epub", title = "Book" }
@@ -704,6 +753,10 @@ describe("Bookshelf UI module", function()
 
         assert.equals(1, provider_calls)
         assert.equals(first, second)
+
+        LibraryUI._invalidateLibraryCache(fake)
+        LibraryUI._continueEntry(fake)
+        assert.equals(2, provider_calls)
     end)
 
     it("skips the progress block for a book with no reading state", function()
@@ -779,6 +832,7 @@ describe("Bookshelf UI module", function()
 
         local browser = {}
         local extracted = false
+        local invalidated = false
         local opds = {
             onShowOPDSCatalog = function(self)
                 self.opds_browser = browser
@@ -791,6 +845,9 @@ describe("Bookshelf UI module", function()
             _triggerBackgroundExtraction = function()
                 extracted = true
             end,
+            _invalidateLibraryCache = function()
+                invalidated = true
+            end,
             _showInfo = function()
                 error("placeholder must not show when OPDS is reachable")
             end,
@@ -802,6 +859,7 @@ describe("Bookshelf UI module", function()
         -- was wrapped; closing refreshes the shelf for the new download
         assert.is_truthy(browser.close_callback)
         browser.close_callback()
+        assert.is_true(invalidated)
         assert.is_true(extracted)
         assert.is_true(dirtied)
 
@@ -1201,7 +1259,7 @@ describe("Bookshelf UI module", function()
         }, { __index = LibraryUI })
 
         assert.is_true(LibraryUI.onShowingReader(fake))
-        assert.is_true(LibraryUI.onShowFileManager(fake))
+        assert.is_false(LibraryUI.onShowFileManager(fake))
         assert.equals(2, close_calls)
     end)
 end)

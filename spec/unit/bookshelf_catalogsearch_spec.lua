@@ -13,6 +13,27 @@ describe("Bookshelf catalog search", function()
     <id>urn:uuid:nav1</id>
     <link rel="subsection" href="/opds/books" type="application/atom+xml;profile=opds-catalog"/>
   </entry>
+  <entry>
+    <title>Recently added Books</title>
+    <id>urn:uuid:nav2</id>
+    <link rel="subsection" href="/opds/new" type="application/atom+xml;profile=opds-catalog"/>
+  </entry>
+  <entry>
+    <title>Hot Books</title>
+    <id>urn:uuid:nav3</id>
+    <link rel="subsection" href="/opds/hot" type="application/atom+xml;profile=opds-catalog"/>
+  </entry>
+</feed>]]
+
+    local ROOT_FEED_WITH_NON_NAV_FIRST_LINK = [[<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>urn:uuid:root</id>
+  <entry>
+    <title>Recently added Books</title>
+    <id>urn:uuid:nav2</id>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/opds/cover/nav2" type="image/jpeg"/>
+    <link rel="subsection" href="/opds/new" type="application/atom+xml;profile=opds-catalog"/>
+  </entry>
 </feed>]]
 
     -- Real calibre-web shape: a text/html Url candidate before the atom one;
@@ -33,6 +54,7 @@ describe("Bookshelf catalog search", function()
     <id>urn:uuid:book1</id>
     <author><name>Douglas Stone</name></author>
     <author><name>Sheila Heen</name></author>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/opds/cover/306" type="image/jpeg"/>
     <link rel="http://opds-spec.org/acquisition" href="/opds/download/306/epub/"
           length="1252498" title="EPUB" type="application/epub+zip"/>
   </entry>
@@ -89,6 +111,8 @@ describe("Bookshelf catalog search", function()
                         assert.equals("servers", key)
                         return {
                             { title = "Project Gutenberg", url = "https://m.gutenberg.org/ebooks.opds/?format=opds" },
+                            { title = "Username Only", url = SERVER.url, username = "rye" },
+                            { title = "Password Only", url = SERVER.url, password = "secret" },
                             { title = "My Library", url = SERVER.url, username = "rye", password = "secret" },
                         }
                     end,
@@ -107,6 +131,9 @@ describe("Bookshelf catalog search", function()
                     readSetting = function()
                         return {
                             { title = "Project Gutenberg", url = "https://m.gutenberg.org/ebooks.opds/?format=opds" },
+                            { title = "Username Only", url = SERVER.url, username = "rye" },
+                            { title = "Password Only", url = SERVER.url, password = "secret" },
+                            { title = "Empty Credentials", url = SERVER.url, username = "", password = "" },
                         }
                     end,
                 }
@@ -133,6 +160,10 @@ describe("Bookshelf catalog search", function()
         assert.is_truthy(hit.author:find("Sheila Heen", 1, true))
         -- relative acquisition href came back absolutized
         assert.equals("http://lib.example/opds/download/306/epub/", hit.epub_href)
+        -- thumbnail surfaced, and the stable catalog id is the URL PATH so
+        -- the download map survives a server host/port change
+        assert.equals("http://lib.example/opds/cover/306", hit.thumb_href)
+        assert.equals("/opds/cover/306", hit.catalog_id)
         -- basic auth flowed into every request
         for _, req in ipairs(log) do
             assert.equals("rye", req.user)
@@ -157,6 +188,76 @@ describe("Bookshelf catalog search", function()
         assert.equals(first_count + 1, #log)
     end)
 
+    it("lists catalog sections with absolutized hrefs", function()
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds"] = ROOT_FEED,
+            }),
+        }
+        local sections, err = cs:sections(SERVER)
+        assert.is_nil(err)
+        assert.equals(3, #sections)
+        assert.equals("Alphabetical Books", sections[1].title)
+        assert.equals("http://lib.example/opds/books", sections[1].href)
+    end)
+
+    it("uses the OPDS item transform for catalog sections", function()
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds"] = ROOT_FEED_WITH_NON_NAV_FIRST_LINK,
+            }),
+        }
+        local sections, err = cs:sections(SERVER)
+        assert.is_nil(err)
+        assert.equals(1, #sections)
+        assert.equals("Recently added Books", sections[1].title)
+        assert.equals("http://lib.example/opds/new", sections[1].href)
+    end)
+
+    it("picks the discover rails out of the sections by href path", function()
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds"] = ROOT_FEED,
+            }),
+        }
+        local rails, err = cs:discoverRails(SERVER)
+        assert.is_nil(err)
+        assert.equals("http://lib.example/opds/new", rails.new.href)
+        assert.equals("http://lib.example/opds/hot", rails.hot.href)
+    end)
+
+    it("reports a catalog without discover sections", function()
+        local bare = ROOT_FEED:gsub("/opds/new", "/opds/x"):gsub("/opds/hot", "/opds/y")
+        local cs = CatalogSearch.new{
+            http = fakeHttp({ ["http://lib.example/opds"] = bare }),
+        }
+        local rails, err = cs:discoverRails(SERVER)
+        assert.is_nil(rails)
+        assert.is_truthy(err)
+    end)
+
+    it("fetches thumbnail bytes with auth", function()
+        local log = {}
+        local cs = CatalogSearch.new{
+            http = fakeHttp({ ["http://lib.example/opds/cover/306"] = "JPEGBYTES" }, log),
+        }
+        local bytes = cs:fetchThumbnail(SERVER, "http://lib.example/opds/cover/306")
+        assert.equals("JPEGBYTES", bytes)
+        assert.equals("rye", log[1].user)
+    end)
+
+    it("fetches a section rail as epub results", function()
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds/new"] = SEARCH_FEED,
+            }),
+        }
+        local results, err = cs:rail(SERVER, "http://lib.example/opds/new")
+        assert.is_nil(err)
+        assert.equals(1, #results)
+        assert.is_truthy(results[1].epub_href)
+    end)
+
     it("reports fetch failures as short error codes", function()
         local cs = CatalogSearch.new{
             http = fakeHttp({}), -- every url 404s
@@ -164,6 +265,30 @@ describe("Bookshelf catalog search", function()
         local results, err = cs:search(SERVER, "anything")
         assert.is_nil(results)
         assert.equals("404", err)
+    end)
+
+    it("resets socket timeouts after fetch exceptions", function()
+        local did_reset = false
+        local cs = CatalogSearch.new{
+            http = {
+                request = function()
+                    error("connection died")
+                end,
+            },
+            socketutil = {
+                set_timeout = function() end,
+                reset_timeout = function()
+                    did_reset = true
+                end,
+                table_sink = function()
+                    return function() end
+                end,
+            },
+        }
+        local body, err = cs:_fetch("http://lib.example/opds", "rye", "secret")
+        assert.is_nil(body)
+        assert.is_truthy(err:find("connection died", 1, true))
+        assert.is_true(did_reset)
     end)
 
     it("downloads an epub into the download dir with collision suffixing", function()
@@ -194,6 +319,48 @@ describe("Bookshelf catalog search", function()
         assert.is_truthy(path2:find("%(1%)%.epub$"))
 
         os.execute("rm -rf " .. dir)
+    end)
+
+    it("removes partial files and resets socket timeouts after download exceptions", function()
+        local lfs = require("libs/libkoreader-lfs")
+        local dir = "/tmp/bookshelf-catalogsearch-error-spec"
+        os.execute("rm -rf " .. dir)
+        lfs.mkdir(dir)
+        finally(function()
+            os.execute("rm -rf " .. dir)
+        end)
+
+        local did_reset = false
+        local cs = CatalogSearch.new{
+            http = {
+                request = function()
+                    error("connection died")
+                end,
+            },
+            socketutil = {
+                FILE_BLOCK_TIMEOUT = 15,
+                FILE_TOTAL_TIMEOUT = 60,
+                set_timeout = function() end,
+                reset_timeout = function()
+                    did_reset = true
+                end,
+                file_sink = function()
+                    return function() end
+                end,
+            },
+        }
+        local result = {
+            title = "Broken Download",
+            author = "Nobody",
+            epub_href = "http://lib.example/opds/download/broken/epub/",
+        }
+
+        local path, err = cs:download(SERVER, result, { download_dir = dir })
+        assert.is_nil(path)
+        assert.is_truthy(err:find("connection died", 1, true))
+        assert.is_true(did_reset)
+        assert.is_nil(lfs.attributes(dir .. "/Nobody - Broken Download.epub", "mode"))
+        assert.is_nil(lfs.attributes(dir .. "/Nobody - Broken Download.epub.part", "mode"))
     end)
 
     it("refuses non-http acquisition urls", function()

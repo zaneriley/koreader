@@ -1,4 +1,6 @@
+local DataStorage = require("datastorage")
 local Dispatcher = require("dispatcher")
+local LuaSettings = require("luasettings")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local lfs = require("libs/libkoreader-lfs")
@@ -21,7 +23,82 @@ local Bookshelf = WidgetContainer:extend{
     name = "bookshelf",
     is_doc_only = false,
     provider = nil,
+    settings_file = DataStorage:getSettingsDir() .. "/bookshelf.lua",
 }
+
+-- Plugin-owned persistence: the Discover feed snapshot and the download map
+-- (catalog book id -> local file). One writer per host lifetime; loaded
+-- lazily so startup cost stays zero. LuaSettings only writes on :flush().
+function Bookshelf:loadSettings()
+    if self.settings then
+        return
+    end
+    self.settings = LuaSettings:open(self.settings_file)
+    self.settings:saveSetting("schema", 1)
+    -- live by-reference table: collaborators mutate it in place
+    self.downloads = self.settings:readSetting("downloads", {})
+    self:_pruneDownloads()
+    if self.settings_dirty then
+        -- once per host session, off the paint path: safe to flush eagerly
+        self.settings:flush()
+        self.settings_dirty = false
+    end
+end
+
+function Bookshelf:_pruneDownloads()
+    for id, path in pairs(self.downloads) do
+        if lfs.attributes(path, "mode") ~= "file" then
+            self.downloads[id] = nil
+            self.settings_dirty = true
+        end
+    end
+end
+
+function Bookshelf:downloadedPath(catalog_id)
+    if not catalog_id then
+        return nil
+    end
+    self:loadSettings()
+    local path = self.downloads[catalog_id]
+    if path and lfs.attributes(path, "mode") == "file" then
+        return path
+    end
+end
+
+function Bookshelf:recordDownload(catalog_id, path)
+    if not catalog_id or not path then
+        return
+    end
+    self:loadSettings()
+    self.downloads[catalog_id] = path
+    -- eager: this map is the ground truth for "on device", and e-ink
+    -- devices suspend or die without warning
+    self.settings:flush()
+    self.settings_dirty = false
+end
+
+function Bookshelf:discoverSnapshot()
+    self:loadSettings()
+    return self.settings:readSetting("discover_snapshot")
+end
+
+function Bookshelf:saveDiscoverSnapshot(snapshot)
+    self:loadSettings()
+    -- replace the whole key, never mutate the old table: a refresh is a new
+    -- world, replacement makes torn half-old/half-new states impossible
+    self.settings:saveSetting("discover_snapshot", snapshot)
+    self.settings:flush()
+    self.settings_dirty = false
+end
+
+-- FlushSettings (suspend/SaveState/host close) is the deferred safety net
+-- for prune-only dirt; distinct from onSaveSettings (document settings).
+function Bookshelf:onFlushSettings()
+    if self.settings and self.settings_dirty then
+        self.settings:flush()
+        self.settings_dirty = false
+    end
+end
 
 function Bookshelf:onDispatcherRegisterActions()
     Dispatcher:registerAction("library_show", {
@@ -241,6 +318,7 @@ function Bookshelf:onShowLibrary()
 
     self.bookshelf_ui = BookshelfUI:new{
         ui = self.ui,
+        plugin = self,
         provider = self:getProvider(),
         closed_callback = function()
             self.bookshelf_ui = nil

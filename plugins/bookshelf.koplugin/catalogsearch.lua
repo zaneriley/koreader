@@ -80,7 +80,9 @@ function CatalogSearch:getServer()
         return nil
     end
     for _, server in ipairs(servers) do
-        if type(server.username) == "string" and server.username ~= "" and server.url then
+        if type(server.username) == "string" and server.username ~= ""
+            and type(server.password) == "string" and server.password ~= ""
+            and server.url then
             return {
                 title = server.title,
                 url = server.url,
@@ -92,23 +94,33 @@ function CatalogSearch:getServer()
     return nil
 end
 
-function CatalogSearch:_fetch(target_url, username, password)
+function CatalogSearch:_withTimeout(block_timeout, total_timeout, fn)
     local socketutil = self:_dep("socketutil")
+    socketutil:set_timeout(block_timeout, total_timeout)
+    local ok, a, b, c, d = pcall(fn)
+    socketutil:reset_timeout()
+    if not ok then
+        return nil, tostring(a)
+    end
+    return a, b, c, d
+end
+
+function CatalogSearch:_fetch(target_url, username, password)
     local http = self:_dep("http")
     local socket = self:_dep("socket")
     local sink_table = {}
     -- Tighter than stock OPDS (10s/30s): search is a passive fill-in, a dead
     -- server must not hang the UI. table_sink enforces the total cap.
-    socketutil:set_timeout(3, 5)
-    local code = socket.skip(1, http.request{
-        url = target_url,
-        method = "GET",
-        headers = { ["Accept-Encoding"] = "identity" },
-        sink = socketutil.table_sink(sink_table),
-        user = username,
-        password = password,
-    })
-    socketutil:reset_timeout()
+    local code, request_err = self:_withTimeout(3, 5, function()
+        return socket.skip(1, http.request{
+            url = target_url,
+            method = "GET",
+            headers = { ["Accept-Encoding"] = "identity" },
+            sink = self:_dep("socketutil").table_sink(sink_table),
+            user = username,
+            password = password,
+        })
+    end)
     if code == 200 then
         local body = table.concat(sink_table)
         if body ~= "" then
@@ -116,7 +128,7 @@ function CatalogSearch:_fetch(target_url, username, password)
         end
         return nil, "empty response"
     end
-    return nil, code and tostring(code) or "network unreachable"
+    return nil, code and tostring(code) or request_err or "network unreachable"
 end
 
 function CatalogSearch:_fetchParsed(target_url, server)
@@ -171,7 +183,7 @@ function CatalogSearch:_discoverTemplate(server)
     return nil, "catalog has no search support"
 end
 
-function CatalogSearch:_resultsFromCatalog(catalog, result_url)
+function CatalogSearch:_itemsFromCatalog(catalog, result_url)
     local Browser = self:_dep("opds_browser")
     -- Throwaway pseudo-instance: genItemTableFromCatalog touches no Menu
     -- widget state, and sync = true makes it a pure feed->items transform
@@ -179,7 +191,13 @@ function CatalogSearch:_resultsFromCatalog(catalog, result_url)
     -- on the class table itself: it mutates fields, and require caches the
     -- module shared with the real OPDS browser.
     local browser = Browser:extend{ sync = true }
-    local items = browser:genItemTableFromCatalog(catalog, result_url)
+    return browser:genItemTableFromCatalog(catalog, result_url), Browser
+end
+
+function CatalogSearch:_resultsFromCatalog(catalog, result_url)
+    local items, Browser = self:_itemsFromCatalog(catalog, result_url)
+    local url = self:_dep("url")
+    local gettext = require("gettext")
     local results = {}
     for _, item in ipairs(items or {}) do
         local epub
@@ -193,16 +211,102 @@ function CatalogSearch:_resultsFromCatalog(catalog, result_url)
             end
         end
         if epub then
+            -- normalize opdsbrowser's localized placeholder strings back to
+            -- nil so the UI's own missing-data paths apply, and download
+            -- filenames degrade to the feed text instead of "Unknown"
+            local title = item.title
+            if title == gettext("Unknown") then title = nil end
+            local author = item.author
+            if author == gettext("Unknown Author") then author = nil end
+            -- thumbnail-first: rails want small images. The href comes back
+            -- absolutized, so the stable book id is the URL PATH — it must
+            -- survive a server host/port change; epub path is the fallback
+            -- key for art-less entries.
+            local thumb = item.thumbnail or item.image
+            local id_href = thumb or epub.href
+            local parsed = id_href and url.parse(id_href)
             table.insert(results, {
-                title = item.title,
-                author = item.author,
+                title = title or item.text,
+                author = author,
                 text = item.text,
                 epub_href = epub.href, -- absolutized by genItemTableFromCatalog
                 mimetype = epub.type,
+                thumb_href = thumb,
+                catalog_id = parsed and parsed.path or nil,
             })
         end
     end
     return results
+end
+
+-- Raw image bytes for one result's thumb_href. Synchronous like download():
+-- callers schedule it off the paint path. Returns bytes | nil, err.
+function CatalogSearch:fetchThumbnail(server, thumb_href)
+    if type(thumb_href) ~= "string" or thumb_href == "" then
+        return nil, "no thumbnail"
+    end
+    return self:_fetch(thumb_href, server.username, server.password)
+end
+
+-- The Discover rails: the catalog's "recently added" and "hot" style
+-- sections, matched by href path on the root feed (calibre-web: /opds/new
+-- and /opds/hot). Title-blind so the server's language does not matter.
+CatalogSearch.RAIL_PATHS = {
+    new = "/new/?$",
+    hot = "/hot/?$",
+}
+
+function CatalogSearch:discoverRails(server)
+    local sections, err = self:sections(server)
+    if not sections then
+        return nil, err
+    end
+    local url = self:_dep("url")
+    local rails = {}
+    for _, section in ipairs(sections) do
+        local parsed = url.parse(section.href) or {}
+        local path = parsed.path or ""
+        for key, pattern in pairs(self.RAIL_PATHS) do
+            if not rails[key] and path:match(pattern) then
+                rails[key] = section
+            end
+        end
+    end
+    if not (rails.new or rails.hot) then
+        return nil, "catalog has no discover sections"
+    end
+    return rails
+end
+
+-- Lists the catalog's navigation sections (title + absolute href) from the
+-- root feed — e.g. calibre-web's Recently added / Hot / Top Rated rows.
+-- Discover picks its rails out of these instead of hardcoding server paths.
+function CatalogSearch:sections(server)
+    local catalog, err = self:_fetchParsed(server.url, server)
+    if not catalog then
+        return nil, err
+    end
+    local items = self:_itemsFromCatalog(catalog, server.url)
+    local sections = {}
+    for _, item in ipairs(items or {}) do
+        if item.url then
+            table.insert(sections, {
+                title = item.text or item.title,
+                href = item.url,
+            })
+        end
+    end
+    return sections
+end
+
+-- Fetches one section feed and returns its epub results, same shape as
+-- search results.
+function CatalogSearch:rail(server, section_href)
+    local catalog, err = self:_fetchParsed(section_href, server)
+    if not catalog then
+        return nil, err
+    end
+    return self:_resultsFromCatalog(catalog, section_href)
 end
 
 function CatalogSearch:search(server, query)
@@ -235,7 +339,6 @@ function CatalogSearch:download(server, result, opts)
     local lfs = self:_dep("lfs")
     local util = self:_dep("util")
     local url = self:_dep("url")
-    local socketutil = self:_dep("socketutil")
     local http = self:_dep("http")
     local socket = self:_dep("socket")
     local reader_settings = self:_dep("reader_settings")
@@ -278,26 +381,35 @@ function CatalogSearch:download(server, result, opts)
         local_path = candidate
     end
 
-    local file, io_err = io.open(local_path, "w")
+    local temp_path = local_path .. ".part"
+    util.removeFile(temp_path)
+    local file, io_err = io.open(temp_path, "w")
     if not file then
         return nil, io_err or "cannot write to download folder"
     end
 
-    socketutil:set_timeout(socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT)
-    local code = socket.skip(1, http.request{
-        url = result.epub_href,
-        headers = { ["Accept-Encoding"] = "identity" },
-        sink = socketutil.file_sink(file), -- closes the handle on completion and on timeout
-        user = server.username,
-        password = server.password,
-    })
-    socketutil:reset_timeout()
+    local socketutil = self:_dep("socketutil")
+    local code, request_err = self:_withTimeout(socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT, function()
+        return socket.skip(1, http.request{
+            url = result.epub_href,
+            headers = { ["Accept-Encoding"] = "identity" },
+            sink = socketutil.file_sink(file), -- closes the handle on completion and on timeout
+            user = server.username,
+            password = server.password,
+        })
+    end)
+    pcall(function() file:close() end)
 
     if code == 200 then
+        local renamed, rename_err = os.rename(temp_path, local_path)
+        if not renamed then
+            util.removeFile(temp_path)
+            return nil, rename_err or "cannot move downloaded file into place"
+        end
         return local_path
     end
-    util.removeFile(local_path) -- drop the empty/partial file
-    return nil, code and tostring(code) or "network unreachable"
+    util.removeFile(temp_path) -- drop the empty/partial file
+    return nil, code and tostring(code) or request_err or "network unreachable"
 end
 
 return CatalogSearch

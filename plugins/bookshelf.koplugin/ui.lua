@@ -138,14 +138,28 @@ function LibraryUI:_triggerBackgroundExtraction()
     local manager = self:_bookInfoManager()
     if not manager then return end
 
+    local cover_specs = self:_coverSpecs()
     local to_extract = {}
     local entries = self:_libraryEntries()
     for _, entry in ipairs(entries) do
         local file = self:_entryFile(entry)
         if file then
             local ok, bookinfo = pcall(manager.getBookInfo, manager, file, false)
-            if not ok or type(bookinfo) ~= "table" or bookinfo.has_cover == nil then
-                table.insert(to_extract, { filepath = file, cover_specs = nil })
+            local should_extract = false
+            if not ok or type(bookinfo) ~= "table" then
+                should_extract = true
+            elseif tonumber(bookinfo.in_progress) and tonumber(bookinfo.in_progress) > 0 then
+                should_extract = false
+            elseif not bookinfo.ignore_cover then
+                if not bookinfo.cover_fetched then
+                    should_extract = true
+                elseif bookinfo.has_cover and manager.isCachedCoverInvalid
+                    and manager.isCachedCoverInvalid(bookinfo, cover_specs) then
+                    should_extract = true
+                end
+            end
+            if should_extract then
+                table.insert(to_extract, { filepath = file, cover_specs = cover_specs })
             end
         end
     end
@@ -217,7 +231,9 @@ end
 
 function LibraryUI:onShowFileManager()
     self:closeBookshelf("full")
-    return true
+    -- Let the explicit File browser event continue to the Reader/FileManager
+    -- underneath. Library is only an overlay participant here.
+    return false
 end
 
 function LibraryUI:_providerOptions()
@@ -245,6 +261,15 @@ function LibraryUI:_providerCall(method, ...)
     end
     logger.warn("Bookshelf provider method failed:", method, result)
     return nil
+end
+
+function LibraryUI:_libraryCache()
+    self._library_cache = self._library_cache or {}
+    return self._library_cache
+end
+
+function LibraryUI:_invalidateLibraryCache()
+    self._library_cache = {}
 end
 
 function LibraryUI:_providerList(...)
@@ -438,23 +463,24 @@ function LibraryUI:_lastFileEntry()
 end
 
 function LibraryUI:_continueEntry()
-    -- Memoized per paint cycle: getContinue reloads ReadHistory and parses
-    -- the book's sidecar, and one paint asks for this entry several times.
-    local cache = self._paint_cache
-    if cache and cache.continue_entry ~= nil then
+    local cache = self:_libraryCache()
+    if cache.continue_entry ~= nil then
         return cache.continue_entry or nil
     end
     local entry = self:_normalizeContinueEntry(self:_providerEntry("getContinue", "getContinueItem", "getLastReading"))
         or self:_currentDocumentEntry()
         or self:_lastFileEntry()
-    if cache then
-        cache.continue_entry = entry or false
-    end
+    cache.continue_entry = entry or false
     return entry
 end
 
 function LibraryUI:_downloadedEntries()
-    return self:_providerList("getDownloaded", "getDownloadedItems", "getDownloadedBooks")
+    local cache = self:_libraryCache()
+    if cache.downloaded_entries then
+        return cache.downloaded_entries
+    end
+    cache.downloaded_entries = self:_providerList("getDownloaded", "getDownloadedItems", "getDownloadedBooks")
+    return cache.downloaded_entries
 end
 
 function LibraryUI:_uniqueEntries(entries)
@@ -471,8 +497,8 @@ function LibraryUI:_uniqueEntries(entries)
 end
 
 function LibraryUI:_libraryEntries()
-    local cache = self._paint_cache
-    if cache and cache.library_entries then
+    local cache = self:_libraryCache()
+    if cache.library_entries then
         return cache.library_entries
     end
     local entries = {}
@@ -484,17 +510,20 @@ function LibraryUI:_libraryEntries()
         table.insert(entries, entry)
     end
     entries = self:_uniqueEntries(entries)
-    if cache then
-        cache.library_entries = entries
-    end
+    cache.library_entries = entries
     return entries
 end
 
 function LibraryUI:_recentlyAddedEntries()
+    local cache = self:_libraryCache()
+    if cache.recently_added_entries then
+        return cache.recently_added_entries
+    end
     local entries = self:_providerList("getRecentlyAdded", "getRecentBooks", "getNewBooks")
     if #entries == 0 then
         entries = self:_libraryEntries()
     end
+    cache.recently_added_entries = entries
     return entries
 end
 
@@ -616,17 +645,23 @@ function LibraryUI:_runLibrarySearch(query)
             if item.entry then
                 self:_openEntry(item.entry)
             elseif item.remote then
-                UIManager:show(InfoMessage:new{ text = _("Downloading…"), timeout = 1 })
-                UIManager:scheduleIn(1, function()
-                    local path, err = cs:download(server, item.remote)
-                    if path then
-                        if not self._closed then
-                            self:_triggerBackgroundExtraction()
-                            UIManager:setDirty(self, "ui", self.dimen)
+                NetworkMgr:runWhenConnected(function()
+                    UIManager:show(InfoMessage:new{ text = _("Downloading…"), timeout = 1 })
+                    UIManager:scheduleIn(1, function()
+                        local path, err = cs:download(server, item.remote)
+                        if path then
+                            if self.plugin and item.remote.catalog_id then
+                                self.plugin:recordDownload(item.remote.catalog_id, path)
+                            end
+                            if not self._closed then
+                                self:_invalidateLibraryCache()
+                                self:_triggerBackgroundExtraction()
+                                UIManager:setDirty(self, "ui", self.dimen)
+                            end
+                        else
+                            self:_showInfo(T(_("Download failed: %1"), err))
                         end
-                    else
-                        self:_showInfo(T(_("Download failed: %1"), err))
-                    end
+                    end)
                 end)
             end
         end,
@@ -799,6 +834,7 @@ function LibraryUI:_addBooks()
             if library._closed then
                 return
             end
+            library:_invalidateLibraryCache()
             library:_triggerBackgroundExtraction()
             UIManager:setDirty(library, "ui", library.dimen)
         end
@@ -959,6 +995,19 @@ end
 
 function LibraryUI:_bookCardMetrics(kind, card_scale)
     return GridLayout.metrics(kind, card_scale or self.shelf_scale, self:_bookTextStack(kind))
+end
+
+function LibraryUI:_coverSpecs()
+    local w = self.dimen and self.dimen.w or Screen:getWidth()
+    local h = self.dimen and self.dimen.h or Screen:getHeight()
+    local viewport_scale = self.shelf_scale or GridLayout.scaleForViewport(w, h)
+    local large = self:_recentlyAddedRailMetrics(w)
+    local small = self:_bookCardMetrics("small", viewport_scale)
+    local continue = self:_continueCardMetrics(viewport_scale)
+    return {
+        max_cover_w = math.max(large.cover_w, small.cover_w, continue.cover_h * 2),
+        max_cover_h = math.max(large.cover_h, small.cover_h, continue.cover_h),
+    }
 end
 
 function LibraryUI:_paintTextBox(bb, text, x, y, width, options)
@@ -1267,6 +1316,13 @@ end
 function LibraryUI:_scheduleCoverCacheRetry()
     if self._cover_cache_retry_scheduled then
         return
+    end
+    if type(self.cover_cache) == "table" then
+        for key, cover in pairs(self.cover_cache) do
+            if cover == false then
+                self.cover_cache[key] = nil
+            end
+        end
     end
     -- A stuck extraction must not repaint forever; covers that finish later
     -- still land on any natural repaint.
@@ -2004,14 +2060,48 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
     })
 end
 
-function LibraryUI:_paintBottomNav(bb, x, y, w, h)
-    self:_paintLine(bb, x, y, w)
-    local labels = {
-        { id = "nav_library", text = _("Library"), icon = "library", callback = function() end, selected = true },
+-- The four tabs, shared by the home and the Discover surface; the active tab
+-- comes from the widget's active_nav_tab field (home by default).
+function LibraryUI:_navItems()
+    return {
+        { id = "nav_library", text = _("Library"), icon = "library", callback = function() self:_navHome() end },
         { id = "nav_dictionary", text = _("Dictionary"), icon = "dictionary", callback = function() self:_showDictionaryLookup() end },
-        { id = "nav_add", text = _("Add Books"), icon = "add", callback = function() self:_addBooks() end },
+        { id = "nav_discover", text = _("Discover"), icon = "discover", callback = function() self:_showDiscover() end },
         { id = "nav_files", text = _("Files"), icon = "files", callback = function() self:_showFiles() end },
     }
+end
+
+function LibraryUI:_navHome()
+    -- the home is already the Library tab; Discover overrides this to close
+end
+
+function LibraryUI:_showDiscover()
+    if self._discover_ui and not self._discover_ui._closed then
+        return
+    end
+    self._discover_class = self._discover_class
+        or dofile(plugin_dir .. "/discover.lua")(LibraryUI, plugin_dir)
+    local library = self
+    self._discover_ui = self._discover_class:new{
+        ui = self.ui,
+        plugin = self.plugin,
+        closed_callback = function()
+            library._discover_ui = nil
+            if not library._closed then
+                UIManager:setDirty(library, "ui", library.dimen)
+            end
+        end,
+    }
+    UIManager:show(self._discover_ui)
+end
+
+function LibraryUI:_paintBottomNav(bb, x, y, w, h)
+    self:_paintLine(bb, x, y, w)
+    local labels = self:_navItems()
+    local active = self.active_nav_tab or "nav_library"
+    for _, item in ipairs(labels) do
+        item.selected = item.id == active
+    end
     local nav = GridLayout.bottomTabs{
         x = x,
         y = y,
@@ -2044,9 +2134,6 @@ function LibraryUI:paintTo(bb, x, y)
     self.dimen.h = Screen:getHeight()
     self.zones = {}
     self.rail_regions = {}
-    -- Provider lookups (history reload, sidecar reads, file stats) run once
-    -- per paint; tap callbacks reuse what the last paint displayed.
-    self._paint_cache = {}
 
     local w = self.dimen.w
     local h = self.dimen.h

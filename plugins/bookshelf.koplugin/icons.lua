@@ -126,6 +126,18 @@ function Icons.paint(bb, name, x, y, size, opts)
         bb:paintRect(folder_x, folder_y, px(0.34), line, color)
         bb:paintRect(folder_x + px(0.30), folder_y + px(0.12), px(0.50), line, color)
         rectBorder(bb, folder_x, folder_y + px(0.18), px(0.80), px(0.52), line, color)
+    elseif name == "discover" then
+        -- compass: square bezel with a diagonal needle and a center pivot
+        local bx, by, bw, bh = rect(0.12, 0.12, 0.76, 0.76)
+        rectBorder(bb, bx, by, bw, bh, line, color)
+        local steps = math.max(3, math.floor(bw * 0.55 / math.max(1, line)))
+        local start_x = bx + px(0.14)
+        local start_y = by + bh - px(0.14) - line
+        for i = 0, steps - 1 do
+            bb:paintRect(start_x + i * line, start_y - i * line, line, line, color)
+        end
+        local dot = math.max(2, line * 2)
+        bb:paintRect(x + math.floor((size - dot) / 2), y + math.floor((size - dot) / 2), dot, dot, color)
     else
         local bx, by, bw, bh = rect(0.15, 0.05, 0.70, 0.90)
         if opts.selected then
