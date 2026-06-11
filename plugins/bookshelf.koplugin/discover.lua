@@ -25,6 +25,13 @@ local CatalogSearch = dofile(plugin_dir .. "/catalogsearch.lua")
 
 local THUMB_CACHE_DIR = DataStorage:getDataDir() .. "/cache/bookshelf"
 
+-- Vertical rail-stack paging (display units, scaled through _px)
+local RailStackTokens = {
+    indicator_band = 24, -- height reserved above the nav for the pager
+    indicator_dot = 6, -- square side, echoing the on-device mark
+    indicator_gap = 10,
+}
+
 local DiscoverUI = LibraryUI:extend{
     title = _("Discover"),
     covers_fullscreen = true, -- repaints start here, never walk the home beneath
@@ -65,14 +72,46 @@ function DiscoverUI:init()
     self:_scheduleRailRefresh()
 end
 
+-- The two anchor rails keep their canonical surface labels; custom shelf
+-- rails carry the reader's own shelf name from the catalog.
+function DiscoverUI:_railLabel(rail)
+    if rail.key == "new" then
+        return _("New in your library")
+    elseif rail.key == "hot" then
+        return _("Popular at home")
+    end
+    return rail.title or ""
+end
+
+-- Snapshot rails are an ordered array of { key, title, rows }. Pre-shelf
+-- snapshots stored a { new = ..., hot = ... } map; convert in place so the
+-- first open after an upgrade still paints from cache.
 function DiscoverUI:_railsFromSnapshot(snapshot)
-    local rails = { new = {}, hot = {} }
     local stored = snapshot and snapshot.rails or {}
-    for key, list in pairs(rails) do
-        local rows = stored[key] and stored[key].rows or {}
-        for _i, row in ipairs(rows) do
-            table.insert(list, self:_discoverEntry(row))
+    if stored.new or stored.hot then
+        local legacy = stored
+        stored = {}
+        for _i, key in ipairs({ "new", "hot" }) do
+            if legacy[key] then
+                table.insert(stored, { key = key, title = legacy[key].title, rows = legacy[key].rows })
+            end
         end
+    end
+    if #stored == 0 then
+        -- no snapshot yet: paint the anchor skeleton, refresh fills it
+        stored = { { key = "new" }, { key = "hot" } }
+    end
+    local rails = {}
+    for _i, rail in ipairs(stored) do
+        local entries = {}
+        for _j, row in ipairs(rail.rows or {}) do
+            table.insert(entries, self:_discoverEntry(row))
+        end
+        table.insert(rails, {
+            key = rail.key,
+            label = self:_railLabel(rail),
+            entries = entries,
+        })
     end
     return rails
 end
@@ -124,13 +163,66 @@ function DiscoverUI:paintTo(bb, x, y)
     self:_paintDiscoverHeader(bb, x + margin, cursor_y, inner_w)
     cursor_y = cursor_y + self:_layoutPx("title_block") + self:_titleToShelfGap()
 
-    cursor_y = self:_paintDiscoverRail(bb, "discover_new",
-        _("New in your library"), self.rails.new, x, cursor_y, w, margin)
-    self:_paintDiscoverRail(bb, "discover_hot",
-        _("Popular at home"), self.rails.hot, x, cursor_y, w, margin)
+    -- The rail stack pages vertically: as many full rails as fit between
+    -- the header and the nav, swipe north/south for the rest. Same paging
+    -- math as the horizontal carousels (GridLayout.pageWindow), with the
+    -- whole page as the step.
+    local rails = self.rails or {}
+    local nav_y = y + h - nav_h
+    local rail_pitch = self:_railPitch(w)
+    local indicator_h = self:_px(RailStackTokens.indicator_band)
+    local stack_h = math.max(rail_pitch, nav_y - cursor_y - indicator_h)
+    local per_page = math.max(1, math.floor(stack_h / rail_pitch))
+    local window = GridLayout.pageWindow(#rails, per_page, self._rail_stack_page, per_page)
+    self._rail_stack_page = window.page
+    self._rail_stack_pages = window.max_page
+    for i = window.first, window.last do
+        local rail = rails[i]
+        cursor_y = self:_paintDiscoverRail(bb, "discover_" .. rail.key,
+            rail.label, rail.entries, x, cursor_y, w, margin)
+    end
+    self:_paintRailStackIndicator(bb, x, w, nav_y - indicator_h, window.page, window.max_page)
 
-    self:_paintBottomNav(bb, x, h - nav_h, w, nav_h)
+    self:_paintBottomNav(bb, x, nav_y, w, nav_h)
     self:_drainThumbQueue() -- kick fills for thumbs this paint missed
+end
+
+-- Quiet square pager above the nav: filled square = current page. Squares
+-- echo the on-device mark; only painted when there is more than one page.
+function DiscoverUI:_paintRailStackIndicator(bb, x, w, y, page, pages)
+    if pages <= 1 then
+        return
+    end
+    local size = self:_px(RailStackTokens.indicator_dot)
+    local gap = self:_px(RailStackTokens.indicator_gap)
+    local cursor = x + math.floor((w - (pages * size + (pages - 1) * gap)) / 2)
+    for i = 1, pages do
+        bb:paintRect(cursor, y, size, size,
+            i == page and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY)
+        cursor = cursor + size + gap
+    end
+end
+
+-- Vertical swipes page the rail stack; horizontal swipes keep paging the
+-- rail carousels through the inherited handler.
+function DiscoverUI:onSwipe(arg, ges)
+    local direction = ges and ges.direction
+    if direction == "north" or direction == "south" then
+        local pages = self._rail_stack_pages or 1
+        local page = self._rail_stack_page or 1
+        local next_page
+        if direction == "north" then
+            next_page = math.min(page + 1, pages)
+        else
+            next_page = math.max(page - 1, 1)
+        end
+        if next_page ~= page then
+            self._rail_stack_page = next_page
+            UIManager:setDirty(self, "ui", self.dimen)
+        end
+        return true
+    end
+    return LibraryUI.onSwipe(self, arg, ges)
 end
 
 function DiscoverUI:_paintDiscoverHeader(bb, x, y, w)
@@ -151,22 +243,42 @@ function DiscoverUI:_paintDiscoverHeader(bb, x, y, w)
     end
 end
 
+-- One source for the discover rail geometry: full columns plus the
+-- half-cover peek, exactly as the carousel painter will scale its cards.
+-- The stack-paging pitch derives from the same numbers, so the page math
+-- always matches what actually paints.
+function DiscoverUI:_discoverRailOptions(w)
+    return {
+        full_count = GridLayout.columns("small", w, self.shelf_scale,
+            self:_bookTextStack("small")),
+        peek = 0.5,
+    }
+end
+
+function DiscoverUI:_discoverRailMetrics(w)
+    local rail_scale = GridLayout.railScale("small", w, self:_discoverRailOptions(w))
+    return self:_bookCardMetrics("small", rail_scale)
+end
+
+-- Height one rail consumes in the stack: header, gap, card, trailing gap.
+function DiscoverUI:_railPitch(w)
+    return self:_sectionHeaderHeight() + self:_layoutPx("shelf_body_gap")
+        + self:_discoverRailMetrics(w).card_h + self:_layoutPx("lower_shelf_gap")
+end
+
 function DiscoverUI:_paintDiscoverRail(bb, rail_id, label, entries, x, y, w, margin)
     self:_paintSectionHeader(bb, label, nil, nil, x + margin, y, w - 2 * margin)
     y = y + self:_sectionHeaderHeight() + self:_layoutPx("shelf_body_gap")
-    local metrics = self:_bookCardMetrics("small", self.shelf_scale)
+    local metrics = self:_discoverRailMetrics(w)
     if #entries == 0 then
-        -- never consume a painter's return value; placeholder + fixed height
+        -- never consume a painter's return value; placeholder + fixed
+        -- height, sized like the carousel so the stack pitch stays uniform
         self:_paintEmptyShelfPlaceholder(bb, x + margin, y,
             metrics.card_w * 2 + metrics.gutter, metrics.card_h)
         return y + metrics.card_h + self:_layoutPx("lower_shelf_gap")
     end
     local rail = self:_paintCarouselRail(bb, rail_id, "small", entries, x, y, w,
-        rail_id .. "_", {
-            full_count = GridLayout.columns("small", w, self.shelf_scale,
-                self:_bookTextStack("small")),
-            peek = 0.5,
-        })
+        rail_id .. "_", self:_discoverRailOptions(w))
     return y + rail.metrics.card_h + self:_layoutPx("lower_shelf_gap")
 end
 
@@ -322,7 +434,7 @@ end
 
 function DiscoverUI:_scheduleRailRefresh()
     UIManager:nextTick(function()
-        if self._closed or not self._server then
+        if self._closed or not self._server or self._refreshing then
             return
         end
         if not NetworkMgr:isConnected() then
@@ -330,58 +442,80 @@ function DiscoverUI:_scheduleRailRefresh()
         end
         -- re-resolve in case the user edited OPDS settings since open
         self._server = self.catalog_search:getServer() or self._server
-        local rails, err = self.catalog_search:discoverRails(self._server)
-        if self._closed or not rails then
+        local plan, err = self.catalog_search:discoverRails(self._server)
+        if self._closed or not plan then
             if err then
                 logger.dbg("Bookshelf discover refresh failed:", err)
             end
             return
         end
+        -- One rail fetch per UI tick: every fetch is time-bounded, and the
+        -- gaps between ticks keep taps and swipes responsive while a long
+        -- shelf list (anchors + one feed per shelf) fills in.
+        self._refreshing = true
         local snapshot = {
             fetched_at = os.time(),
             server_url = self._server.url,
             rails = {},
         }
-        local fresh = { new = {}, hot = {} }
-        for key in pairs(fresh) do
-            local section = rails[key]
-            if section then
-                local rows = self.catalog_search:rail(self._server, section.href)
-                if rows then
-                    snapshot.rails[key] = { title = section.title, rows = rows }
-                    for _i, row in ipairs(rows) do
-                        table.insert(fresh[key], self:_discoverEntry(row))
-                    end
-                end
+        local index = 0
+        local step
+        step = function()
+            if self._closed then
+                self._refreshing = false
+                return
             end
-        end
-        if self._closed then
-            return
-        end
-        self.rails = fresh
-        if self.plugin then
-            self.plugin:saveDiscoverSnapshot(snapshot)
-        end
-        self._stale = false
-        self._snapshot_fetched_at = snapshot.fetched_at
-        -- the world changed: drop negative thumb sentinels and stale
-        -- inflight markers so the new rails can re-queue their art
-        self._thumb_offline = nil
-        if type(self.cover_cache) == "table" then
-            for key, value in pairs(self.cover_cache) do
-                if value == false and key:sub(1, 8) == "catalog:" then
-                    self.cover_cache[key] = nil
-                end
+            index = index + 1
+            local rail = plan[index]
+            if not rail then
+                self:_finishRailRefresh(snapshot)
+                return
             end
-        end
-        for key in pairs(self._thumb_inflight) do
-            if self.cover_cache == nil or self.cover_cache[key] == nil then
-                self._thumb_inflight[key] = nil
+            local rows = self.catalog_search:rail(self._server, rail.href)
+            -- anchors always land (even empty: their placeholder is the
+            -- surface skeleton); shelf rails only when they have books
+            if rows and (#rows > 0 or rail.key == "new" or rail.key == "hot") then
+                table.insert(snapshot.rails, { key = rail.key, title = rail.title, rows = rows })
             end
+            UIManager:nextTick(step)
         end
-        self:_pruneThumbCache(snapshot)
-        UIManager:setDirty(self, "ui", self.dimen)
+        step()
     end)
+end
+
+function DiscoverUI:_finishRailRefresh(snapshot)
+    self._refreshing = false
+    if self._closed then
+        return
+    end
+    if #snapshot.rails == 0 then
+        -- every fetch failed mid-chain: keep the standing snapshot
+        logger.dbg("Bookshelf discover refresh produced no rails")
+        return
+    end
+    self.rails = self:_railsFromSnapshot(snapshot)
+    if self.plugin then
+        self.plugin:saveDiscoverSnapshot(snapshot)
+    end
+    self._stale = false
+    self._snapshot_fetched_at = snapshot.fetched_at
+    -- the world changed: drop negative thumb sentinels and stale
+    -- inflight markers so the new rails can re-queue their art
+    self._thumb_offline = nil
+    if type(self.cover_cache) == "table" then
+        for key, value in pairs(self.cover_cache) do
+            if value == false and key:sub(1, 8) == "catalog:" then
+                self.cover_cache[key] = nil
+            end
+        end
+    end
+    for key in pairs(self._thumb_inflight) do
+        if self.cover_cache == nil or self.cover_cache[key] == nil then
+            self._thumb_inflight[key] = nil
+        end
+    end
+    self:_pruneThumbCache(snapshot)
+    UIManager:setDirty(self, "ui", self.dimen)
 end
 
 -- bound the disk cache to the books the rails actually show

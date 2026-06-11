@@ -256,26 +256,80 @@ CatalogSearch.RAIL_PATHS = {
     hot = "/hot/?$",
 }
 
+-- The reader's own collections (calibre-web: /opds/shelfindex), matched the
+-- same href-path way.
+CatalogSearch.SHELF_INDEX_PATH = "/shelfindex/?$"
+
+-- Returns the ordered rail plan for the Discover surface: the two anchor
+-- sections first (new, hot), then one rail per custom shelf in catalog
+-- order. Each rail is { key, title, href }; shelf keys embed the shelf's
+-- href path so they stay stable across hosts. Shelf discovery is best
+-- effort: a catalog without shelves (or a failing shelf index) still
+-- yields the anchor rails.
 function CatalogSearch:discoverRails(server)
     local sections, err = self:sections(server)
     if not sections then
         return nil, err
     end
     local url = self:_dep("url")
-    local rails = {}
-    for _, section in ipairs(sections) do
+    local anchors = {}
+    local shelf_index
+    for _i, section in ipairs(sections) do
         local parsed = url.parse(section.href) or {}
         local path = parsed.path or ""
         for key, pattern in pairs(self.RAIL_PATHS) do
-            if not rails[key] and path:match(pattern) then
-                rails[key] = section
+            if not anchors[key] and path:match(pattern) then
+                anchors[key] = section
+            end
+        end
+        if not shelf_index and path:match(self.SHELF_INDEX_PATH) then
+            shelf_index = section
+        end
+    end
+    if not (anchors.new or anchors.hot) then
+        return nil, "catalog has no discover sections"
+    end
+    local rails = {}
+    for _i, key in ipairs({ "new", "hot" }) do
+        local section = anchors[key]
+        if section then
+            table.insert(rails, { key = key, title = section.title, href = section.href })
+        end
+    end
+    for _i, shelf in ipairs(self:shelves(server, shelf_index)) do
+        table.insert(rails, shelf)
+    end
+    return rails
+end
+
+-- Lists the catalog's custom shelves from its shelf index feed. calibre-web
+-- decorates shelf titles with a visibility marker ("Name (Public)"); that is
+-- server metadata, not the shelf's name, so it is stripped for display.
+function CatalogSearch:shelves(server, shelf_index_section)
+    if not shelf_index_section then
+        return {}
+    end
+    local catalog = self:_fetchParsed(shelf_index_section.href, server)
+    if not catalog then
+        return {} -- degraded, not fatal: the anchor rails still stand
+    end
+    local url = self:_dep("url")
+    local shelves = {}
+    for _i, item in ipairs(self:_itemsFromCatalog(catalog, shelf_index_section.href) or {}) do
+        local title = item.text or item.title
+        if item.url and type(title) == "string" then
+            title = title:gsub("%s*%(Public%)%s*$", ""):gsub("%s*%(Private%)%s*$", "")
+            if title ~= "" then
+                local path = (url.parse(item.url) or {}).path or item.url
+                table.insert(shelves, {
+                    key = "shelf:" .. path,
+                    title = title,
+                    href = item.url,
+                })
             end
         end
     end
-    if not (rails.new or rails.hot) then
-        return nil, "catalog has no discover sections"
-    end
-    return rails
+    return shelves
 end
 
 -- Lists the catalog's navigation sections (title + absolute href) from the

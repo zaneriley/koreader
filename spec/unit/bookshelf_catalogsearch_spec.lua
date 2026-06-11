@@ -23,6 +23,28 @@ describe("Bookshelf catalog search", function()
     <id>urn:uuid:nav3</id>
     <link rel="subsection" href="/opds/hot" type="application/atom+xml;profile=opds-catalog"/>
   </entry>
+  <entry>
+    <title>Shelves</title>
+    <id>urn:uuid:nav4</id>
+    <link rel="subsection" href="/opds/shelfindex" type="application/atom+xml;profile=opds-catalog"/>
+  </entry>
+</feed>]]
+
+    -- Trimmed from a live calibre-web shelf index: titles carry the
+    -- "(Public)" visibility marker that must not reach the surface.
+    local SHELF_INDEX_FEED = [[<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>urn:uuid:shelves</id>
+  <entry>
+    <title>Learning Japanese (Public)</title>
+    <id>/opds/shelf/8</id>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="/opds/shelf/8"/>
+  </entry>
+  <entry>
+    <title>The Hacker&#39;s Craft (Public)</title>
+    <id>/opds/shelf/9</id>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="/opds/shelf/9"/>
+  </entry>
 </feed>]]
 
     local ROOT_FEED_WITH_NON_NAV_FIRST_LINK = [[<?xml version="1.0" encoding="UTF-8"?>
@@ -196,7 +218,7 @@ describe("Bookshelf catalog search", function()
         }
         local sections, err = cs:sections(SERVER)
         assert.is_nil(err)
-        assert.equals(3, #sections)
+        assert.equals(4, #sections)
         assert.equals("Alphabetical Books", sections[1].title)
         assert.equals("http://lib.example/opds/books", sections[1].href)
     end)
@@ -214,16 +236,50 @@ describe("Bookshelf catalog search", function()
         assert.equals("http://lib.example/opds/new", sections[1].href)
     end)
 
-    it("picks the discover rails out of the sections by href path", function()
+    it("orders the discover rails anchors first, by href path", function()
         local cs = CatalogSearch.new{
             http = fakeHttp({
                 ["http://lib.example/opds"] = ROOT_FEED,
+                ["http://lib.example/opds/shelfindex"] = SHELF_INDEX_FEED,
             }),
         }
         local rails, err = cs:discoverRails(SERVER)
         assert.is_nil(err)
-        assert.equals("http://lib.example/opds/new", rails.new.href)
-        assert.equals("http://lib.example/opds/hot", rails.hot.href)
+        assert.equals("new", rails[1].key)
+        assert.equals("http://lib.example/opds/new", rails[1].href)
+        assert.equals("hot", rails[2].key)
+        assert.equals("http://lib.example/opds/hot", rails[2].href)
+    end)
+
+    it("appends one rail per custom shelf, stripping the visibility marker", function()
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds"] = ROOT_FEED,
+                ["http://lib.example/opds/shelfindex"] = SHELF_INDEX_FEED,
+            }),
+        }
+        local rails, err = cs:discoverRails(SERVER)
+        assert.is_nil(err)
+        assert.equals(4, #rails)
+        assert.equals("shelf:/opds/shelf/8", rails[3].key)
+        assert.equals("Learning Japanese", rails[3].title)
+        assert.equals("http://lib.example/opds/shelf/8", rails[3].href)
+        assert.equals("shelf:/opds/shelf/9", rails[4].key)
+        assert.equals("The Hacker's Craft", rails[4].title)
+    end)
+
+    it("degrades to the anchor rails when the shelf index is unreachable", function()
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds"] = ROOT_FEED,
+                -- /opds/shelfindex 404s
+            }),
+        }
+        local rails, err = cs:discoverRails(SERVER)
+        assert.is_nil(err)
+        assert.equals(2, #rails)
+        assert.equals("new", rails[1].key)
+        assert.equals("hot", rails[2].key)
     end)
 
     it("reports a catalog without discover sections", function()

@@ -14,7 +14,7 @@ describe("Bookshelf discover", function()
         fetched_at = 1760000000,
         server_url = "http://lib.example/opds",
         rails = {
-            new = { title = "Recently added Books", rows = {
+            { key = "new", title = "Recently added Books", rows = {
                 {
                     title = "Difficult Conversations",
                     author = "Sheila Heen",
@@ -24,11 +24,20 @@ describe("Bookshelf discover", function()
                     catalog_id = "/opds/cover/306",
                 },
             } },
-            hot = { title = "Hot Books", rows = {} },
+            { key = "hot", title = "Hot Books", rows = {} },
+            { key = "shelf:/opds/shelf/8", title = "Learning Japanese", rows = {
+                {
+                    title = "それから",
+                    author = "夏目 漱石",
+                    text = "それから",
+                    epub_href = "http://lib.example/opds/download/401/epub/",
+                    catalog_id = "/opds/cover/401",
+                },
+            } },
         },
     }
 
-    it("builds rail entries from a snapshot with on-device resolution", function()
+    it("builds ordered rails from a snapshot with on-device resolution", function()
         local fake = setmetatable({
             plugin = {
                 downloadedPath = function(_, catalog_id)
@@ -41,13 +50,98 @@ describe("Bookshelf discover", function()
 
         local rails = DiscoverUI._railsFromSnapshot(fake, SNAPSHOT)
 
-        assert.equals(1, #rails.new)
-        assert.equals(0, #rails.hot)
-        local entry = rails.new[1]
+        assert.equals(3, #rails)
+        -- anchors carry the surface's canonical labels, not server titles
+        assert.equals("New in your library", rails[1].label)
+        assert.equals("Popular at home", rails[2].label)
+        -- a custom shelf rail carries the reader's own shelf name
+        assert.equals("Learning Japanese", rails[3].label)
+        assert.equals(1, #rails[3].entries)
+
+        assert.equals(1, #rails[1].entries)
+        assert.equals(0, #rails[2].entries)
+        local entry = rails[1].entries[1]
         assert.equals("Difficult Conversations", entry.display_title)
         assert.equals("Sheila Heen", entry.authors)
         assert.equals("/downloads/difficult.epub", entry.file) -- on-device mark
         assert.is_function(entry.callback) -- card tap opens the panel
+    end)
+
+    it("converts a pre-shelf map snapshot into ordered rails", function()
+        local fake = setmetatable({}, { __index = DiscoverUI })
+        local rails = DiscoverUI._railsFromSnapshot(fake, {
+            rails = {
+                new = { title = "Recently added Books", rows = {
+                    { title = "A", catalog_id = "/opds/cover/1" },
+                } },
+                hot = { title = "Hot Books", rows = {} },
+            },
+        })
+        assert.equals(2, #rails)
+        assert.equals("new", rails[1].key)
+        assert.equals(1, #rails[1].entries)
+        assert.equals("hot", rails[2].key)
+    end)
+
+    it("seeds the anchor skeleton when no snapshot exists", function()
+        local fake = setmetatable({}, { __index = DiscoverUI })
+        local rails = DiscoverUI._railsFromSnapshot(fake, nil)
+        assert.equals(2, #rails)
+        assert.equals("New in your library", rails[1].label)
+        assert.equals("Popular at home", rails[2].label)
+        assert.equals(0, #rails[1].entries)
+    end)
+
+    it("pages the rail stack with vertical swipes and clamps at the edges", function()
+        local UIManager = require("ui/uimanager")
+        local dirty = 0
+        local old_set_dirty = UIManager.setDirty
+        finally(function()
+            UIManager.setDirty = old_set_dirty
+        end)
+        UIManager.setDirty = function()
+            dirty = dirty + 1
+        end
+
+        local fake = setmetatable({
+            _rail_stack_page = 1,
+            _rail_stack_pages = 3,
+            rail_regions = {},
+            dimen = {},
+        }, { __index = DiscoverUI })
+
+        assert.is_true(DiscoverUI.onSwipe(fake, nil, { direction = "north" }))
+        assert.equals(2, fake._rail_stack_page)
+        assert.is_true(DiscoverUI.onSwipe(fake, nil, { direction = "south" }))
+        assert.equals(1, fake._rail_stack_page)
+        local repaints = dirty
+        assert.equals(2, repaints)
+        -- clamped at the first page: consumed, no repaint
+        assert.is_true(DiscoverUI.onSwipe(fake, nil, { direction = "south" }))
+        assert.equals(1, fake._rail_stack_page)
+        assert.equals(repaints, dirty)
+        -- horizontal swipes still fall through to the carousel handler
+        assert.is_false(DiscoverUI.onSwipe(fake, nil, { direction = "west", pos = nil }))
+    end)
+
+    it("paints one indicator square per rail page, none for a single page", function()
+        local Blitbuffer = require("ffi/blitbuffer")
+        local rects = {}
+        local fake = setmetatable({ shelf_scale = 1 }, { __index = DiscoverUI })
+        local bb = {
+            paintRect = function(_, _x, _y, _w, _h, color)
+                table.insert(rects, color)
+            end,
+        }
+
+        DiscoverUI._paintRailStackIndicator(fake, bb, 0, 1404, 100, 2, 4)
+        assert.equals(4, #rects)
+        assert.equals(tostring(Blitbuffer.COLOR_BLACK), tostring(rects[2]))
+        assert.equals(tostring(Blitbuffer.COLOR_LIGHT_GRAY), tostring(rects[1]))
+
+        rects = {}
+        DiscoverUI._paintRailStackIndicator(fake, bb, 0, 1404, 100, 1, 1)
+        assert.equals(0, #rects)
     end)
 
     it("keys remote covers by catalog id and local files by the home scheme", function()
