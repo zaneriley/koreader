@@ -880,6 +880,42 @@ function LibraryUI:_libraryLanguages()
     return tags
 end
 
+-- The language rows for the filter dialog. A saved filter must always be
+-- visible and resettable here — even when no book on the device carries
+-- its tag any more — or a stale pref strands All books at "0 of N" with
+-- no in-UI way out.
+function LibraryUI:_languageFilterChoices()
+    local languages = self:_libraryLanguages()
+    local current = self:_uiPref("library_filter_language", "all")
+    if #languages == 0 and current == "all" then
+        return {} -- nothing to filter by and nothing active: no section
+    end
+    local choices = {
+        { key = "all", label = _("All languages"), selected = current == "all" },
+    }
+    local has_current = current == "all"
+    for _i, tag in ipairs(languages) do
+        table.insert(choices, {
+            key = tag,
+            label = LANGUAGE_NAMES[tag] or tag,
+            selected = tag == current,
+        })
+        if tag == current then
+            has_current = true
+        end
+    end
+    if not has_current then
+        -- the active filter's language is absent from the device library:
+        -- show it anyway, checkmarked, so the empty shelf explains itself
+        table.insert(choices, {
+            key = current,
+            label = LANGUAGE_NAMES[current] or current,
+            selected = true,
+        })
+    end
+    return choices
+end
+
 local function choiceLabel(selected, label)
     -- trailing checkmark, the stock dialog convention
     return selected and (label .. "  ✓") or label
@@ -909,7 +945,6 @@ end
 function LibraryUI:_showFilter()
     local ButtonDialog = require("ui/widget/buttondialog")
     local status_current = self:_uiPref("library_filter_status", "all")
-    local language_current = self:_uiPref("library_filter_language", "all")
     local dialog
     local buttons = {}
     for _i, option in ipairs(STATUS_OPTIONS) do
@@ -921,22 +956,16 @@ function LibraryUI:_showFilter()
             end,
         }})
     end
-    local languages = self:_libraryLanguages()
-    if #languages > 0 then
+    local choices = self:_languageFilterChoices()
+    if #choices > 0 then
         table.insert(buttons, {}) -- separator: status above, language below
-        table.insert(buttons, {{
-            text = choiceLabel(language_current == "all", _("All languages")),
-            callback = function()
-                UIManager:close(dialog)
-                self:_saveUiPref("library_filter_language", "all")
-            end,
-        }})
-        for _i, tag in ipairs(languages) do
+        for _i, choice in ipairs(choices) do
+            local key = choice.key
             table.insert(buttons, {{
-                text = choiceLabel(tag == language_current, LANGUAGE_NAMES[tag] or tag),
+                text = choiceLabel(choice.selected, choice.label),
                 callback = function()
                     UIManager:close(dialog)
-                    self:_saveUiPref("library_filter_language", tag)
+                    self:_saveUiPref("library_filter_language", key)
                 end,
             }})
         end

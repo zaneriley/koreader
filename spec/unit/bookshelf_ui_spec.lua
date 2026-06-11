@@ -315,6 +315,38 @@ describe("Bookshelf UI module", function()
         assert.is_false(LibraryUI._entryMatchesFilter(fake, new_ja, "all", "en"))
     end)
 
+    it("keeps a stale language filter visible and resettable", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        -- a saved "ja" filter with no tagged books on the device must still
+        -- surface All languages and the active tag, or the shelf strands
+        local fake = setmetatable({
+            _libraryEntries = function()
+                return {} -- no language metadata anywhere
+            end,
+            _uiPref = function(_, key, fallback)
+                if key == "library_filter_language" then
+                    return "ja"
+                end
+                return fallback
+            end,
+        }, { __index = LibraryUI })
+
+        local choices = LibraryUI._languageFilterChoices(fake)
+        assert.equals(2, #choices)
+        assert.equals("all", choices[1].key)
+        assert.is_false(choices[1].selected)
+        assert.equals("ja", choices[2].key)
+        assert.is_true(choices[2].selected)
+
+        -- no tags and no active filter: no language section at all
+        local quiet = setmetatable({
+            _libraryEntries = function()
+                return {}
+            end,
+        }, { __index = LibraryUI })
+        assert.equals(0, #LibraryUI._languageFilterChoices(quiet))
+    end)
+
     it("card kebabs open the book panel, never the placeholder", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local panel_entries = {}
