@@ -99,22 +99,13 @@ function DiscoverUI:_railLabel(rail)
     return rail.title or ""
 end
 
--- Snapshot rails are an ordered array of { key, title, rows }. Pre-shelf
--- snapshots stored a { new = ..., hot = ... } map; convert in place so the
--- first open after an upgrade still paints from cache.
+-- Snapshot rails are an ordered array of { key, title, rows }. The
+-- snapshot is cache, not user data: anything else on disk (including the
+-- pre-shelf { new, hot } map shape) is a cache miss that paints the
+-- anchor skeleton until a refresh lands.
 function DiscoverUI:_railsFromSnapshot(snapshot)
     local stored = snapshot and snapshot.rails or {}
-    if stored.new or stored.hot then
-        local legacy = stored
-        stored = {}
-        for _i, key in ipairs({ "new", "hot" }) do
-            if legacy[key] then
-                table.insert(stored, { key = key, title = legacy[key].title, rows = legacy[key].rows })
-            end
-        end
-    end
     if #stored == 0 then
-        -- no snapshot yet: paint the anchor skeleton, refresh fills it
         stored = { { key = "new" }, { key = "hot" } }
     end
     local rails = {}

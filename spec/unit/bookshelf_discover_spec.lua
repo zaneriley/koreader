@@ -67,7 +67,7 @@ describe("Bookshelf discover", function()
         assert.is_function(entry.callback) -- card tap opens the panel
     end)
 
-    it("converts a pre-shelf map snapshot into ordered rails", function()
+    it("treats a pre-shelf map snapshot as a cache miss", function()
         local fake = setmetatable({}, { __index = DiscoverUI })
         local rails = DiscoverUI._railsFromSnapshot(fake, {
             rails = {
@@ -77,10 +77,10 @@ describe("Bookshelf discover", function()
                 hot = { title = "Hot Books", rows = {} },
             },
         })
+        -- the snapshot is cache: an old shape paints the skeleton, not data
         assert.equals(2, #rails)
-        assert.equals("new", rails[1].key)
-        assert.equals(1, #rails[1].entries)
-        assert.equals("hot", rails[2].key)
+        assert.equals("New in your library", rails[1].label)
+        assert.equals(0, #rails[1].entries)
     end)
 
     it("resolves rail rows with carry-forward on failed fetches", function()
