@@ -749,6 +749,59 @@ describe("Bookshelf UI module", function()
         assert.equals(0, bar_calls)
     end)
 
+    it("opens the OPDS catalog and refreshes the shelf when it closes", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local UIManager = require("ui/uimanager")
+        local orig_set_dirty = UIManager.setDirty
+        local dirtied = false
+        UIManager.setDirty = function() dirtied = true end
+
+        local browser = {}
+        local extracted = false
+        local opds = {
+            onShowOPDSCatalog = function(self)
+                self.opds_browser = browser
+            end,
+        }
+        local fake = setmetatable({
+            ui = { opds = opds },
+            _closed = false,
+            dimen = {},
+            _triggerBackgroundExtraction = function()
+                extracted = true
+            end,
+            _showInfo = function()
+                error("placeholder must not show when OPDS is reachable")
+            end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._addBooks(fake)
+
+        -- the catalog opened (its browser was built) and its close_callback
+        -- was wrapped; closing refreshes the shelf for the new download
+        assert.is_truthy(browser.close_callback)
+        browser.close_callback()
+        assert.is_true(extracted)
+        assert.is_true(dirtied)
+
+        UIManager.setDirty = orig_set_dirty
+    end)
+
+    it("shows a placeholder when no OPDS source is reachable", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local shown
+        local fake = setmetatable({
+            ui = {},
+            _showInfo = function(_, text)
+                shown = text
+            end,
+        }, { __index = LibraryUI })
+
+        LibraryUI._addBooks(fake)
+
+        assert.is_truthy(shown)
+    end)
+
     it("uses shared layout spacing tokens for shelf positioning", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local fake = setmetatable({

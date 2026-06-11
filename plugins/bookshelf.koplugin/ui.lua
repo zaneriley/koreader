@@ -511,19 +511,6 @@ function LibraryUI:_dictionary()
     return nil
 end
 
-function LibraryUI:_opds()
-    if not self.ui then
-        return nil
-    end
-    if self.ui.opds then
-        return self.ui.opds
-    end
-    if type(self.ui.getOPDS) == "function" then
-        return self.ui:getOPDS()
-    end
-    return nil
-end
-
 function LibraryUI:_showInfo(text)
     UIManager:show(InfoMessage:new{
         text = text,
@@ -621,13 +608,42 @@ function LibraryUI:_continue()
 end
 
 function LibraryUI:_addBooks()
-    local opds = self:_opds()
-    if opds and type(opds.onShowOPDSCatalog) == "function" then
-        opds:onShowOPDSCatalog()
+    -- Open KOReader's stock OPDS catalog through the host's registered OPDS
+    -- module (self.ui.opds; plugin name "opds"), the same handler its own menu
+    -- item invokes. Guard on the handler's presence, not its type: at runtime
+    -- onShowOPDSCatalog resolves to a callable value rather than a bare
+    -- function, so a type=="function" check would wrongly fall through to the
+    -- placeholder. If OPDS is absent, opds is nil and the placeholder is right.
+    local opds = self.ui and self.ui.opds
+    if not (opds and opds.onShowOPDSCatalog) then
+        self:_showInfo(_("No book sources are configured."))
         return
     end
 
-    self:_showInfo(_("No book sources are configured."))
+    opds:onShowOPDSCatalog()
+
+    -- Refresh the library after the catalog closes. The OPDS browser stacks on
+    -- top of this still-shown widget and pops via its close_callback; nothing
+    -- on that path repaints the bookshelf or extracts a freshly downloaded
+    -- file, so a kept-browsing download would otherwise not appear. The call
+    -- above is synchronous and has already built opds.opds_browser with its
+    -- close_callback, so we wrap that callback in place, fresh each time,
+    -- against this live widget (no method monkeypatch, no stale capture).
+    local browser = opds.opds_browser
+    if browser then
+        local previous_close = browser.close_callback
+        local library = self
+        browser.close_callback = function(...)
+            if previous_close then
+                previous_close(...)
+            end
+            if library._closed then
+                return
+            end
+            library:_triggerBackgroundExtraction()
+            UIManager:setDirty(library, "ui", library.dimen)
+        end
+    end
 end
 
 function LibraryUI:_zone(id, rect, callback, clip_rect)
