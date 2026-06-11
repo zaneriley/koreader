@@ -53,6 +53,9 @@ describe("Bookshelf plugin FileManager choreography", function()
     it("claims generic Home only when Library is the home view", function()
         local shown_library = false
         local original_reader_settings = _G.G_reader_settings
+        finally(function()
+            _G.G_reader_settings = original_reader_settings
+        end)
         local plugin = setmetatable({
             onShowLibrary = function()
                 shown_library = true
@@ -60,24 +63,41 @@ describe("Bookshelf plugin FileManager choreography", function()
             end,
         }, { __index = Bookshelf })
 
-        _G.G_reader_settings = {
-            readSetting = function(_, name)
-                if name == "home_view" then
-                    return "library"
-                end
-            end,
-        }
+        local function useSettings(settings)
+            shown_library = false
+            _G.G_reader_settings = {
+                readSetting = function(_, name)
+                    return settings[name]
+                end,
+            }
+        end
+
+        useSettings({
+            home_view = "library",
+        })
         assert.is_true(plugin:onShowHome())
         assert.is_true(shown_library)
 
-        shown_library = false
-        _G.G_reader_settings = {
-            readSetting = function(_, name)
-                if name == "home_view" then
-                    return "filemanager"
-                end
-            end,
-        }
+        useSettings({
+            start_with = "library",
+        })
+        assert.is_true(plugin:onShowHome())
+        assert.is_true(shown_library)
+
+        useSettings({
+            home_view = "filemanager",
+            start_with = "library",
+        })
+        assert.is_false(plugin:onShowHome())
+        assert.is_false(shown_library)
+
+        useSettings({})
+        assert.is_false(plugin:onShowHome())
+        assert.is_false(shown_library)
+
+        useSettings({
+            start_with = "filemanager",
+        })
         assert.is_false(plugin:onShowHome())
         assert.is_false(shown_library)
 

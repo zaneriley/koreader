@@ -59,7 +59,7 @@ function Bookshelf:_isLibraryHome()
     if home_view ~= nil then
         return home_view == "library"
     end
-    return (self:_readSetting("start_with") or "library") == "library"
+    return self:_readSetting("start_with") == "library"
 end
 
 function Bookshelf:_isReaderHost()

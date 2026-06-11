@@ -252,7 +252,7 @@ elseif directory then
 else
     -- Get which file to start with
     local last_file = G_reader_settings:readSetting("lastfile")
-    local start_with = G_reader_settings:readSetting("start_with") or "library"
+    local start_with = G_reader_settings:readSetting("start_with") or "filemanager"
 
     local QuickStart = require("ui/quickstart")
     if not QuickStart:isShown() then

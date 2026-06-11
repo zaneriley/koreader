@@ -986,7 +986,7 @@ function FileManagerMenu:getStartWithMenuTable()
         table.insert(sub_item_table, {
             text = v[1],
             checked_func = function()
-                return v[2] == G_reader_settings:readSetting("start_with", "library")
+                return v[2] == G_reader_settings:readSetting("start_with", "filemanager")
             end,
             callback = function()
                 G_reader_settings:saveSetting("start_with", v[2])
@@ -996,7 +996,7 @@ function FileManagerMenu:getStartWithMenuTable()
     end
     return {
         text_func = function()
-            local start_with = G_reader_settings:readSetting("start_with") or "library"
+            local start_with = G_reader_settings:readSetting("start_with") or "filemanager"
             for i, v in ipairs(start_withs) do
                 if v[2] == start_with then
                     return T(_("Start with: %1"), v[1])
