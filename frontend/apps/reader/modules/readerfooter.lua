@@ -2044,6 +2044,7 @@ function ReaderFooter:genFooterLayoutMenuItems(value)
         callback = function()
             self.settings.footer_layout = value
             G_reader_settings:saveSetting("footer", self.settings)
+            self:setTocMarkers(true)
             self:refreshFooter(true, true)
         end,
     }
@@ -2566,10 +2567,11 @@ function ReaderFooter:genAllFooterText(gen_to_skip)
 end
 
 function ReaderFooter:setTocMarkers(reset)
-    if self:isThreeZoneLayout() or self.settings.disable_progress_bar or self.settings.progress_style_thin then return end
     if reset then
         self.progress_bar.ticks = nil
+        self.progress_bar.last = nil
     end
+    if self:isThreeZoneLayout() or self.settings.disable_progress_bar or self.settings.progress_style_thin then return end
     if self.settings.toc_markers and not self.settings.chapter_progress_bar then
         self.progress_bar.tick_width = Screen:scaleBySize(self.settings.toc_markers_width)
         if self.progress_bar.ticks ~= nil then -- already computed

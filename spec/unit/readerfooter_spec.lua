@@ -388,13 +388,15 @@ describe("Readerfooter module", function()
         footer:onUpdateFooter()
 
         local old_screen_getwidth = Screen.getWidth
+        finally(function()
+            Screen.getWidth = old_screen_getwidth
+        end)
         Screen.getWidth = function() return 360 end
         footer:resetLayout(true)
         footer:onUpdateFooter()
 
         assert.are.same(360 - 2 * footer.horizontal_margin, footer.three_zone_container.dimen.w)
         assertThreeZoneGroupSpacing(footer)
-        Screen.getWidth = old_screen_getwidth
     end)
 
     it("should pick up screen resize in resetLayout", function()
@@ -419,6 +421,9 @@ describe("Readerfooter module", function()
         assert.is.same(expected, footer.progress_bar.width)
 
         local old_screen_getwidth = Screen.getWidth
+        finally(function()
+            Screen.getWidth = old_screen_getwidth
+        end)
         Screen.getWidth = function() return 900 end
         local new_horizontal_margin = Screen:scaleBySize(10)*2
         footer:resetLayout()
@@ -429,7 +434,6 @@ describe("Readerfooter module", function()
                             + new_horizontal_margin)
         expected = (is_am() and 518 or 510) - (new_horizontal_margin - horizontal_margin)
         assert.is.same(expected, footer.progress_bar.width)
-        Screen.getWidth = old_screen_getwidth
     end)
 
     it("should update width on PosUpdate event", function()
@@ -659,7 +663,7 @@ describe("Readerfooter module", function()
         local footer = readerui.view.footer
 
         assert.is.truthy(footer.settings.all_at_once)
-        assert.is.truthy(0, footer.mode)
+        assert.is.same(0, footer.mode)
         assert.is.falsy(readerui.view.footer_visible)
     end)
 
