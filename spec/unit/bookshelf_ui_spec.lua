@@ -276,6 +276,90 @@ describe("Bookshelf UI module", function()
         assert.equals("Document", text_calls[#text_calls])
     end)
 
+    it("card kebabs open the book panel, never the placeholder", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local panel_entries = {}
+        local zones = {}
+        local fake = setmetatable({
+            shelf_scale = 1,
+            zones = {},
+            _zone = function(_, id, _rect, callback)
+                zones[id] = callback
+            end,
+            _showBookPanel = function(_, entry)
+                table.insert(panel_entries, entry)
+            end,
+            _openEntry = function() end,
+            _paintBookCover = function() end,
+            _paintTextBox = function() end,
+            _paintCenteredIcon = function() end,
+            _coverTitleLines = function()
+                return { "Title" }
+            end,
+            _entryTitle = function()
+                return "Title"
+            end,
+            _entryAuthor = function()
+                return "Author"
+            end,
+        }, { __index = LibraryUI })
+        local bb = { paintRect = function() end }
+        local entry = { file = "/books/a.epub" }
+        local slot = {
+            x = 0, y = 0, w = 161, h = 367,
+            cover = { x = 0, y = 0, w = 161, h = 244 },
+            title = { x = 0, y = 250, w = 161, h = 60 },
+            metadata = { x = 0, y = 312, w = 120, h = 30 },
+            menu = { x = 130, y = 312, w = 24, h = 24 },
+        }
+
+        LibraryUI._paintBookCard(fake, bb, entry, slot, "book_1", {})
+
+        assert.is_function(zones["book_1_menu"])
+        zones["book_1_menu"]()
+        assert.equals(entry, panel_entries[1])
+    end)
+
+    it("resolves a verified local path for panel actions", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local epub = "/tmp/bookshelf-ui-localpath-spec.epub"
+        local f = io.open(epub, "w")
+        f:write("x")
+        f:close()
+        finally(function()
+            os.remove(epub)
+        end)
+
+        local fake = setmetatable({
+            plugin = {
+                downloadedPath = function(_, catalog_id)
+                    if catalog_id == "/opds/download/1/epub/" then
+                        return epub
+                    end
+                end,
+            },
+        }, { __index = LibraryUI })
+
+        -- catalog entries resolve through the download map
+        assert.equals(epub, LibraryUI._entryLocalPath(fake,
+            { catalog_id = "/opds/download/1/epub/" }))
+        -- local entries must stat: a vanished file yields nothing
+        assert.equals(epub, LibraryUI._entryLocalPath(fake, { file = epub }))
+        assert.is_nil(LibraryUI._entryLocalPath(fake, { file = "/tmp/gone.epub" }))
+    end)
+
+    it("drops a continue entry whose file no longer exists", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local fake = setmetatable({
+            _isCurrentFile = function()
+                return false
+            end,
+        }, { __index = LibraryUI })
+
+        assert.is_nil(LibraryUI._normalizeContinueEntry(fake,
+            { file = "/tmp/definitely-gone.epub", text = "Gone" }))
+    end)
+
     it("paints the pressed band only for a matching zone id", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local rects = {}

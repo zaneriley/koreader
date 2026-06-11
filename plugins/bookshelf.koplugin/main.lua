@@ -3,6 +3,7 @@ local Dispatcher = require("dispatcher")
 local LuaSettings = require("luasettings")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local ffiUtil = require("ffi/util")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local _ = require("gettext")
@@ -75,6 +76,53 @@ function Bookshelf:recordDownload(catalog_id, path)
     -- devices suspend or die without warning
     self.settings:flush()
     self.settings_dirty = false
+end
+
+-- Reverse lookup for the panel's Remove/Delete split: is this local file
+-- one the plugin downloaded from the catalog? Paths are compared raw and
+-- realpath-normalized — a symlink mismatch must never reclassify a
+-- library-linked book into the irreversible delete flow.
+function Bookshelf:catalogIdForFile(file)
+    if type(file) ~= "string" or file == "" then
+        return nil
+    end
+    self:loadSettings()
+    local real = ffiUtil.realpath(file) or file
+    for id, path in pairs(self.downloads) do
+        if path == file or (ffiUtil.realpath(path) or path) == real then
+            return id
+        end
+    end
+end
+
+-- Removes the local copy of a catalog-linked book: deletes the file and
+-- retires EVERY map key pointing at it (the legacy-id migration means one
+-- path can be reachable under two keys). Deliberately leaves the .sdr
+-- sidecar: progress reattaches if the book is re-added at the same path.
+-- Returns the removed path, or nil.
+function Bookshelf:removeDownload(catalog_id)
+    if not catalog_id then
+        return nil
+    end
+    self:loadSettings()
+    local path = self.downloads[catalog_id]
+    if not path then
+        return nil
+    end
+    local ok = os.remove(path)
+    if not ok and lfs.attributes(path, "mode") == "file" then
+        return nil -- file exists but could not be removed
+    end
+    for id, p in pairs(self.downloads) do
+        if p == path then
+            self.downloads[id] = nil
+        end
+    end
+    -- eager: this map is the ground truth for "on device", and e-ink
+    -- devices suspend or die without warning
+    self.settings:flush()
+    self.settings_dirty = false
+    return path
 end
 
 -- Lazy one-time migration: earlier builds keyed downloads by the

@@ -246,6 +246,41 @@ describe("Bookshelf discover", function()
         os.remove(settings_file)
     end)
 
+    it("removes a download, retiring every key that points at the path", function()
+        local settings_file = "/tmp/bookshelf-discover-remove-spec.lua"
+        os.remove(settings_file)
+        local plugin = setmetatable({
+            settings_file = settings_file,
+            ui = { document = nil },
+        }, { __index = Bookshelf })
+
+        local epub = "/tmp/bookshelf-discover-remove-spec.epub"
+        local f = io.open(epub, "w")
+        f:write("x")
+        f:close()
+
+        -- the same path reachable under a legacy and a current key
+        Bookshelf.recordDownload(plugin, "/opds/cover/305", epub)
+        Bookshelf.recordDownload(plugin, "/opds/download/305/epub/", epub)
+
+        -- reverse lookup finds a key for the file (either of the two)
+        assert.is_truthy(Bookshelf.catalogIdForFile(plugin, epub))
+        assert.is_nil(Bookshelf.catalogIdForFile(plugin, "/tmp/elsewhere.epub"))
+
+        local removed = Bookshelf.removeDownload(plugin, "/opds/download/305/epub/")
+        assert.equals(epub, removed)
+        -- the file is gone and BOTH keys retired
+        assert.is_nil(io.open(epub, "r"))
+        assert.is_nil(Bookshelf.downloadedPath(plugin, "/opds/download/305/epub/"))
+        assert.is_nil(Bookshelf.downloadedPath(plugin, "/opds/cover/305"))
+        assert.is_nil(Bookshelf.catalogIdForFile(plugin, epub))
+
+        -- removing an unknown id is a quiet no-op
+        assert.is_nil(Bookshelf.removeDownload(plugin, "/opds/download/999/epub/"))
+
+        os.remove(settings_file)
+    end)
+
     it("migrates legacy thumb-path download keys on resolve", function()
         local settings_file = "/tmp/bookshelf-discover-migrate-spec.lua"
         os.remove(settings_file)
