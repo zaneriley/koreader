@@ -118,6 +118,8 @@ function DiscoverUI:_railsFromSnapshot(snapshot)
         table.insert(rails, {
             key = rail.key,
             label = self:_railLabel(rail),
+            href = rail.href,
+            rows = rail.rows or {},
             entries = entries,
         })
     end
@@ -191,9 +193,7 @@ function DiscoverUI:paintTo(bb, x, y)
     self._rail_stack_page = window.page
     self._rail_stack_pages = window.max_page
     for i = window.first, window.last do
-        local rail = rails[i]
-        cursor_y = self:_paintDiscoverRail(bb, "discover_" .. rail.key,
-            rail.label, rail.entries, x, cursor_y, w, margin)
+        cursor_y = self:_paintDiscoverRail(bb, rails[i], x, cursor_y, w, margin)
     end
     if indicator_fits then
         self:_paintRailStackIndicator(bb, x, w, nav_y - indicator_h, window.page, window.max_page)
@@ -282,20 +282,26 @@ function DiscoverUI:_railPitch(w)
         + self:_discoverRailMetrics(w).card_h + self:_layoutPx("lower_shelf_gap")
 end
 
-function DiscoverUI:_paintDiscoverRail(bb, rail_id, label, entries, x, y, w, margin)
-    self:_paintSectionHeader(bb, label, nil, nil, x + margin, y, w - 2 * margin)
+function DiscoverUI:_paintDiscoverRail(bb, rail, x, y, w, margin)
+    local rail_id = "discover_" .. rail.key
+    -- the header opens the shelf-detail surface; the chevron painted by
+    -- _paintSectionHeader is honest because the zone exists
+    self:_paintSectionHeader(bb, rail.label, nil, nil, x + margin, y, w - 2 * margin,
+        rail_id .. "_header", function()
+            self:_showShelfDetail(rail)
+        end)
     y = y + self:_sectionHeaderHeight() + self:_layoutPx("shelf_body_gap")
     local metrics = self:_discoverRailMetrics(w)
-    if #entries == 0 then
+    if #rail.entries == 0 then
         -- never consume a painter's return value; placeholder + fixed
         -- height, sized like the carousel so the stack pitch stays uniform
         self:_paintEmptyShelfPlaceholder(bb, x + margin, y,
             metrics.card_w * 2 + metrics.gutter, metrics.card_h)
         return y + metrics.card_h + self:_layoutPx("lower_shelf_gap")
     end
-    local rail = self:_paintCarouselRail(bb, rail_id, "small", entries, x, y, w,
+    local painted = self:_paintCarouselRail(bb, rail_id, "small", rail.entries, x, y, w,
         rail_id .. "_", self:_discoverRailOptions(w))
-    return y + rail.metrics.card_h + self:_layoutPx("lower_shelf_gap")
+    return y + painted.metrics.card_h + self:_layoutPx("lower_shelf_gap")
 end
 
 -- nav: the painter is inherited; only the two tab behaviors flip
@@ -514,7 +520,10 @@ function DiscoverUI:_refreshStep(state)
         local rows = self:_resolveRailRows(rail,
             self.catalog_search:rail(self._server, rail.href), state.standing)
         if rows then
-            table.insert(state.snapshot.rails, { key = rail.key, title = rail.title, rows = rows })
+            -- href rides along so the shelf-detail surface can browse the
+            -- whole feed from a cold snapshot
+            table.insert(state.snapshot.rails,
+                { key = rail.key, title = rail.title, href = rail.href, rows = rows })
         end
     end
     self:_scheduleNextRefreshStep(state)
@@ -648,6 +657,223 @@ function DiscoverUI:_downloadEntry(entry, and_then)
         end)
     end)
 end
+
+-- Shelf detail: the "see all" surface behind a rail header. A full-screen
+-- grid of the whole feed in the bookshelf grammar — seeded instantly from
+-- the rail's snapshot rows, then replaced by live pages that follow the
+-- catalog's "next" links one fetch at a time. Inherits the catalog
+-- toolkit (thumbs, panel, entry building) from DiscoverUI.
+local ShelfDetailUI = DiscoverUI:extend{
+    covers_fullscreen = true,
+    active_nav_tab = "nav_discover",
+    dithered = true,
+}
+
+function ShelfDetailUI:init()
+    self.dimen = Geom:new{
+        x = 0, y = 0,
+        w = Screen:getWidth(),
+        h = Screen:getHeight(),
+    }
+    self.rail_regions = {}
+    self.rail_state = {}
+    self.ges_events.Tap = {
+        GestureRange:new{ ges = "tap", range = self.dimen },
+    }
+    self.ges_events.Swipe = {
+        GestureRange:new{ ges = "swipe", range = self.dimen },
+    }
+    if Device:hasKeys() then
+        self.key_events.Close = { { Device.input.group.Back } }
+    end
+
+    self.catalog_search = self.catalog_search or CatalogSearch.new()
+    self._server = self.catalog_search:available() and self.catalog_search:getServer() or nil
+    self._thumb_queue = {}
+    self._thumb_inflight = {}
+
+    -- paint instantly from the rail's snapshot rows; the live feed
+    -- replaces them when the network allows
+    self.entries = {}
+    for _i, row in ipairs(self.rail.rows or {}) do
+        table.insert(self.entries, self:_discoverEntry(row))
+    end
+    self._stale = true
+    self._page = 1
+    self._next_href = nil
+    self:_scheduleDetailLoad(self.rail.href, true)
+end
+
+-- One bounded fetch per scheduled pass, same shape as the rails refresh.
+function ShelfDetailUI:_scheduleDetailLoad(href, replace)
+    if not href or self._loading or not self._server then
+        return
+    end
+    self._loading = true
+    UIManager:scheduleIn(REFRESH_STEP_DELAY, function()
+        if self._closed then
+            self._loading = false
+            return
+        end
+        if not NetworkMgr:isConnected() then
+            self._loading = false
+            return -- offline: the seeded snapshot rows stand
+        end
+        local page = self.catalog_search:railPage(self._server, href)
+        self._loading = false
+        if self._closed or not page then
+            return
+        end
+        local entries = replace and {} or self.entries
+        for _i, row in ipairs(page.rows or {}) do
+            table.insert(entries, self:_discoverEntry(row))
+        end
+        self.entries = entries
+        self._next_href = page.next_href
+        self._stale = false
+        UIManager:setDirty(self, "ui", self.dimen)
+    end)
+end
+
+function ShelfDetailUI:paintTo(bb, x, y)
+    self.dimen.x = x
+    self.dimen.y = y
+    self.dimen.w = Screen:getWidth()
+    self.dimen.h = Screen:getHeight()
+    self.zones = {}
+    self.rail_regions = {}
+    self._paint_cache = {}
+    local w = self.dimen.w
+    local h = self.dimen.h
+    self.shelf_scale = GridLayout.scaleForViewport(w, h)
+    local metrics = self:_bookCardMetrics("small", self.shelf_scale)
+    local margin = metrics.outer
+    local inner_w = w - 2 * margin
+    local nav_h = GridLayout.bottomTabs{ w = w, count = 4, scale = self.shelf_scale }.h
+    local cursor_y = y + self:_layoutPx("page_top")
+    bb:paintRect(x, y, w, h, Blitbuffer.COLOR_WHITE)
+
+    self:_paintStatusBar(bb, x + margin, cursor_y, inner_w)
+    cursor_y = cursor_y + self:_layoutPx("status_to_title")
+    self:_paintText(bb, self.rail.label or "", x + margin, cursor_y, {
+        face = LibraryUI._font_tokens.display_italic,
+        size = 38,
+        max_width = inner_w,
+    })
+    if self._stale and self.snapshot_fetched_at then
+        self:_paintText(bb, T(_("as of %1"), os.date("%b %d, %H:%M", self.snapshot_fetched_at)),
+            x + margin, cursor_y + self:_layoutPx("title_block") - self:_px(6), {
+                face = LibraryUI._font_tokens.sans,
+                size = 11,
+                color = Blitbuffer.COLOR_DARK_GRAY,
+                max_width = inner_w,
+            })
+    end
+    cursor_y = cursor_y + self:_layoutPx("title_block") + self:_titleToShelfGap()
+
+    local nav_y = y + h - nav_h
+    local indicator_h = self:_px(RailStackTokens.indicator_band)
+    local row_pitch = metrics.card_h + metrics.row_gap
+    local avail = nav_y - cursor_y - indicator_h
+    local indicator_fits = avail >= metrics.card_h
+    local rows_per_page = math.max(1, math.floor((avail + metrics.row_gap) / row_pitch))
+    local cols = GridLayout.columns("small", w, self.shelf_scale, self:_bookTextStack("small"))
+    local per_page = cols * rows_per_page
+    local window = GridLayout.pageWindow(#self.entries, per_page, self._page, per_page)
+    self._page = window.page
+    self._pages = window.max_page
+
+    if window.count == 0 then
+        self:_paintEmptyShelfPlaceholder(bb, x + margin, cursor_y,
+            metrics.card_w * 2 + metrics.gutter, metrics.card_h)
+    else
+        local grid = GridLayout.grid("small", {
+            x = x,
+            y = cursor_y,
+            w = w,
+            item_count = window.count,
+            columns = cols,
+            rows = rows_per_page,
+            scale = self.shelf_scale,
+            text_stack = self:_bookTextStack("small"),
+        })
+        for i = 1, window.count do
+            local entry = self.entries[window.first + i - 1]
+            local slot = grid.slots[i]
+            if entry and slot then
+                self:_paintBookCard(bb, entry, slot, "detail_" .. (window.first + i - 1), {})
+            end
+        end
+    end
+
+    -- stay one feed page ahead of the reader
+    if window.page == window.max_page and self._next_href then
+        self:_scheduleDetailLoad(self._next_href, false)
+    end
+
+    if indicator_fits then
+        self:_paintRailStackIndicator(bb, x, w, nav_y - indicator_h, window.page, window.max_page)
+    end
+    self:_paintBottomNav(bb, x, nav_y, w, nav_h)
+    self:_drainThumbQueue()
+end
+
+function ShelfDetailUI:onSwipe(arg, ges)
+    local direction = ges and ges.direction
+    if direction == "north" or direction == "south" then
+        local pages = self._pages or 1
+        local page = self._page or 1
+        local next_page
+        if direction == "north" then
+            next_page = math.min(page + 1, pages)
+        else
+            next_page = math.max(page - 1, 1)
+        end
+        if next_page ~= page then
+            self._page = next_page
+            UIManager:setDirty(self, "ui", self.dimen)
+        end
+        return true
+    end
+    return LibraryUI.onSwipe(self, arg, ges)
+end
+
+-- nav: Discover goes back to the surface beneath; Library unwinds both
+function ShelfDetailUI:_showDiscover()
+    self:closeBookshelf()
+end
+
+function ShelfDetailUI:_navHome()
+    local discover = self.discover
+    self:closeBookshelf()
+    if discover and not discover._closed then
+        discover:closeBookshelf()
+    end
+end
+
+function DiscoverUI:_showShelfDetail(rail)
+    if self._detail_ui and not self._detail_ui._closed then
+        return
+    end
+    local discover = self
+    self._detail_ui = ShelfDetailUI:new{
+        ui = self.ui,
+        plugin = self.plugin,
+        catalog_search = self.catalog_search,
+        rail = rail,
+        snapshot_fetched_at = self._snapshot_fetched_at,
+        discover = discover,
+        closed_callback = function()
+            discover._detail_ui = nil
+            if not discover._closed then
+                UIManager:setDirty(discover, "ui", discover.dimen)
+            end
+        end,
+    }
+    UIManager:show(self._detail_ui)
+end
+
+DiscoverUI.ShelfDetailUI = ShelfDetailUI -- exposed for specs
 
 return DiscoverUI
 end

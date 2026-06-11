@@ -329,6 +329,26 @@ describe("Bookshelf catalog search", function()
         assert.equals("rye", log[1].user)
     end)
 
+    it("returns a rail page with the catalog's next link", function()
+        local paged = SEARCH_FEED:gsub("<entry>",
+            [[<link rel="next" href="/opds/new?offset=60" type="application/atom+xml;profile=opds-catalog"/><entry>]],
+            1)
+        local cs = CatalogSearch.new{
+            http = fakeHttp({
+                ["http://lib.example/opds/new"] = paged,
+                ["http://lib.example/opds/new?offset=60"] = SEARCH_FEED,
+            }),
+        }
+        local page, err = cs:railPage(SERVER, "http://lib.example/opds/new")
+        assert.is_nil(err)
+        assert.equals(1, #page.rows)
+        assert.equals("http://lib.example/opds/new?offset=60", page.next_href)
+
+        -- the last page carries no next link
+        local last = cs:railPage(SERVER, "http://lib.example/opds/new?offset=60")
+        assert.is_nil(last.next_href)
+    end)
+
     it("fetches a section rail as epub results", function()
         local cs = CatalogSearch.new{
             http = fakeHttp({

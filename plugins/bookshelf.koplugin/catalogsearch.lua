@@ -199,6 +199,7 @@ function CatalogSearch:_resultsFromCatalog(catalog, result_url)
     local url = self:_dep("url")
     local gettext = require("gettext")
     local results = {}
+    local feed_hrefs = items and items.hrefs
     for _, item in ipairs(items or {}) do
         local epub
         for _, acq in ipairs(item.acquisitions or {}) do
@@ -236,7 +237,24 @@ function CatalogSearch:_resultsFromCatalog(catalog, result_url)
             })
         end
     end
-    return results
+    -- feed_hrefs carries the feed-level rel links (absolutized by the
+    -- parser), e.g. hrefs.next when the catalog paginates
+    return results, feed_hrefs
+end
+
+-- One page of a section feed: rows plus the "next" href when the catalog
+-- paginates — for surfaces that browse a whole shelf rather than a rail
+-- window. Returns { rows, next_href } | nil, err.
+function CatalogSearch:railPage(server, page_href)
+    local catalog, err = self:_fetchParsed(page_href, server)
+    if not catalog then
+        return nil, err
+    end
+    local rows, feed_hrefs = self:_resultsFromCatalog(catalog, page_href)
+    return {
+        rows = rows,
+        next_href = feed_hrefs and feed_hrefs.next or nil,
+    }
 end
 
 -- Raw image bytes for one result's thumb_href. Synchronous like download():
@@ -376,7 +394,9 @@ function CatalogSearch:rail(server, section_href)
     if not catalog then
         return nil, err
     end
-    return self:_resultsFromCatalog(catalog, section_href)
+    -- single value: the feed-level hrefs stay internal to railPage
+    local results = self:_resultsFromCatalog(catalog, section_href)
+    return results
 end
 
 function CatalogSearch:search(server, query)
@@ -398,7 +418,8 @@ function CatalogSearch:search(server, query)
         self._template_cache[server.url] = nil
         return nil, err
     end
-    return self:_resultsFromCatalog(catalog, search_url)
+    local results = self:_resultsFromCatalog(catalog, search_url)
+    return results
 end
 
 -- Downloads one search result's EPUB into the shelf's download dir.

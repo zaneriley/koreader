@@ -125,6 +125,51 @@ describe("Bookshelf discover", function()
         assert.equals(0, #rails[1].entries)
     end)
 
+    it("carries href and rows on rails for the shelf-detail surface", function()
+        local fake = setmetatable({}, { __index = DiscoverUI })
+        local rails = DiscoverUI._railsFromSnapshot(fake, {
+            rails = {
+                { key = "shelf:/opds/shelf/8", title = "Learning Japanese",
+                  href = "http://lib.example/opds/shelf/8", rows = {
+                    { title = "それから", catalog_id = "/opds/download/401/epub/" },
+                } },
+            },
+        })
+        assert.equals("http://lib.example/opds/shelf/8", rails[1].href)
+        assert.equals(1, #rails[1].rows)
+        assert.equals(1, #rails[1].entries)
+    end)
+
+    it("shelf detail seeds from snapshot rows and pages vertically", function()
+        local ShelfDetailUI = DiscoverUI.ShelfDetailUI
+        assert.equals("nav_discover", ShelfDetailUI.active_nav_tab)
+
+        local UIManager = require("ui/uimanager")
+        local dirty = 0
+        local old_set_dirty = UIManager.setDirty
+        finally(function()
+            UIManager.setDirty = old_set_dirty
+        end)
+        UIManager.setDirty = function()
+            dirty = dirty + 1
+        end
+
+        local fake = setmetatable({
+            _page = 1,
+            _pages = 2,
+            rail_regions = {},
+            dimen = {},
+        }, { __index = ShelfDetailUI })
+
+        assert.is_true(ShelfDetailUI.onSwipe(fake, nil, { direction = "north" }))
+        assert.equals(2, fake._page)
+        assert.equals(1, dirty)
+        -- clamped at the last page
+        assert.is_true(ShelfDetailUI.onSwipe(fake, nil, { direction = "north" }))
+        assert.equals(2, fake._page)
+        assert.equals(1, dirty)
+    end)
+
     it("pages the rail stack with vertical swipes and clamps at the edges", function()
         local UIManager = require("ui/uimanager")
         local dirty = 0
