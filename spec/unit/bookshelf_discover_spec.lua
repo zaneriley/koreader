@@ -326,6 +326,28 @@ describe("Bookshelf discover", function()
         os.remove(settings_file)
     end)
 
+    it("persists ui preferences across plugin instances", function()
+        local settings_file = "/tmp/bookshelf-discover-prefs-spec.lua"
+        os.remove(settings_file)
+        local plugin = setmetatable({
+            settings_file = settings_file,
+            ui = { document = nil },
+        }, { __index = Bookshelf })
+
+        assert.is_nil(Bookshelf.uiPref(plugin, "library_sort"))
+        Bookshelf.saveUiPref(plugin, "library_sort", "title")
+        Bookshelf.saveUiPref(plugin, "library_filter_status", "reading")
+
+        local reloaded = setmetatable({
+            settings_file = settings_file,
+            ui = { document = nil },
+        }, { __index = Bookshelf })
+        assert.equals("title", Bookshelf.uiPref(reloaded, "library_sort"))
+        assert.equals("reading", Bookshelf.uiPref(reloaded, "library_filter_status"))
+
+        os.remove(settings_file)
+    end)
+
     it("migrates legacy thumb-path download keys on resolve", function()
         local settings_file = "/tmp/bookshelf-discover-migrate-spec.lua"
         os.remove(settings_file)

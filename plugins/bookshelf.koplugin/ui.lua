@@ -78,6 +78,25 @@ local PanelTokens = {
     cover_h = 184,
 }
 
+-- All-books view preferences. Sort keys map onto the provider's sort
+-- fields; status keys onto the provider's record.status values.
+local SORT_OPTIONS = {
+    { key = "recent", label = _("Recent") },
+    { key = "title", label = _("Title") },
+    { key = "authors", label = _("Author") },
+}
+local STATUS_OPTIONS = {
+    { key = "all", label = _("All") },
+    { key = "reading", label = _("Reading") },
+    { key = "new", label = _("Unread") },
+    { key = "complete", label = _("Finished") },
+}
+-- display names for the language filter; unknown tags show as-is
+local LANGUAGE_NAMES = {
+    en = _("English"),
+    ja = "日本語",
+}
+
 local IconTokens = {
     visual = 24,
     tap = 40,
@@ -732,12 +751,238 @@ function LibraryUI:_showDictionaryLookup()
     self:_showInfo(_("Dictionary lookup is unavailable."))
 end
 
-function LibraryUI:_showFilter()
-    self:_showInfo(_("Sort and filter controls are not configured yet."))
+-- the primary language subtag: "en-US" -> "en", "ja" -> "ja"
+local function languageTag(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+    return value:lower():match("^%a%a%a?")
 end
 
+function LibraryUI:_uiPref(key, fallback)
+    local value = self.plugin and self.plugin:uiPref(key)
+    if value == nil then
+        return fallback
+    end
+    return value
+end
+
+function LibraryUI:_saveUiPref(key, value)
+    if self.plugin then
+        self.plugin:saveUiPref(key, value)
+    end
+    self:_invalidateLibraryCache()
+    UIManager:setDirty(self, "ui", self.dimen)
+end
+
+function LibraryUI:_librarySortKey()
+    local key = self:_uiPref("library_sort", "recent")
+    for _i, option in ipairs(SORT_OPTIONS) do
+        if option.key == key then
+            return key, option.label
+        end
+    end
+    return "recent", SORT_OPTIONS[1].label
+end
+
+-- In-place view sort over the provider's precomputed sort fields, with
+-- display-field fallbacks for entries that did not come from the provider
+-- (e.g. the continue entry). "recent" keeps the provider's order.
+function LibraryUI:_applyLibrarySort(entries, key)
+    if key == "recent" then
+        return entries
+    end
+    -- raw fields only: _entryTitle/_entryAuthor return DISPLAY strings
+    -- (BiDi-isolate wrapped), whose control bytes sort after every letter
+    local function titleKey(entry)
+        if entry.sort_title then
+            return entry.sort_title
+        end
+        local raw = entry.display_title or entry.title or entry.text or entry.name
+        return type(raw) == "string" and raw:lower() or ""
+    end
+    local function authorKey(entry)
+        if entry.sort_authors then
+            return entry.sort_authors
+        end
+        local raw = entry.authors or entry.author
+        return type(raw) == "string" and raw:lower() or ""
+    end
+    if key == "title" then
+        table.sort(entries, function(a, b)
+            local ta, tb = titleKey(a), titleKey(b)
+            if ta ~= tb then
+                return ta < tb
+            end
+            return authorKey(a) < authorKey(b)
+        end)
+    elseif key == "authors" then
+        table.sort(entries, function(a, b)
+            local aa, ab = authorKey(a), authorKey(b)
+            if aa ~= ab then
+                -- authorless entries sort last, not first
+                if aa == "" or ab == "" then
+                    return ab == ""
+                end
+                return aa < ab
+            end
+            return titleKey(a) < titleKey(b)
+        end)
+    end
+    return entries
+end
+
+function LibraryUI:_entryMatchesFilter(entry, status_key, language_key)
+    if status_key and status_key ~= "all" then
+        if (entry.status or "new") ~= status_key then
+            return false
+        end
+    end
+    if language_key and language_key ~= "all" then
+        if languageTag(entry.language) ~= language_key then
+            return false
+        end
+    end
+    return true
+end
+
+-- The All books shelf's view: the library filtered and sorted per the
+-- persisted preferences. Search and the other shelves stay unfiltered.
+function LibraryUI:_allBooksEntries()
+    local cache = self:_libraryCache()
+    if cache.all_books_entries then
+        return cache.all_books_entries
+    end
+    local status_key = self:_uiPref("library_filter_status", "all")
+    local language_key = self:_uiPref("library_filter_language", "all")
+    local entries = {}
+    for _i, entry in ipairs(self:_libraryEntries()) do
+        if self:_entryMatchesFilter(entry, status_key, language_key) then
+            table.insert(entries, entry)
+        end
+    end
+    self:_applyLibrarySort(entries, (self:_librarySortKey()))
+    cache.all_books_entries = entries
+    return entries
+end
+
+-- distinct language tags across the library, for the filter dialog
+function LibraryUI:_libraryLanguages()
+    local seen, tags = {}, {}
+    for _i, entry in ipairs(self:_libraryEntries()) do
+        local tag = languageTag(entry.language)
+        if tag and not seen[tag] then
+            seen[tag] = true
+            table.insert(tags, tag)
+        end
+    end
+    table.sort(tags)
+    return tags
+end
+
+local function choiceLabel(selected, label)
+    -- trailing checkmark, the stock dialog convention
+    return selected and (label .. "  ✓") or label
+end
+
+function LibraryUI:_showSortDialog()
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local current = self:_librarySortKey()
+    local dialog
+    local buttons = {}
+    for _i, option in ipairs(SORT_OPTIONS) do
+        table.insert(buttons, {{
+            text = choiceLabel(option.key == current, option.label),
+            callback = function()
+                UIManager:close(dialog)
+                self:_saveUiPref("library_sort", option.key)
+            end,
+        }})
+    end
+    dialog = ButtonDialog:new{
+        width_factor = 0.6,
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+function LibraryUI:_showFilter()
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local status_current = self:_uiPref("library_filter_status", "all")
+    local language_current = self:_uiPref("library_filter_language", "all")
+    local dialog
+    local buttons = {}
+    for _i, option in ipairs(STATUS_OPTIONS) do
+        table.insert(buttons, {{
+            text = choiceLabel(option.key == status_current, option.label),
+            callback = function()
+                UIManager:close(dialog)
+                self:_saveUiPref("library_filter_status", option.key)
+            end,
+        }})
+    end
+    local languages = self:_libraryLanguages()
+    if #languages > 0 then
+        table.insert(buttons, {}) -- separator: status above, language below
+        table.insert(buttons, {{
+            text = choiceLabel(language_current == "all", _("All languages")),
+            callback = function()
+                UIManager:close(dialog)
+                self:_saveUiPref("library_filter_language", "all")
+            end,
+        }})
+        for _i, tag in ipairs(languages) do
+            table.insert(buttons, {{
+                text = choiceLabel(tag == language_current, LANGUAGE_NAMES[tag] or tag),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_saveUiPref("library_filter_language", tag)
+                end,
+            }})
+        end
+    end
+    dialog = ButtonDialog:new{
+        width_factor = 0.6,
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+-- The library-level actions behind the page header's kebab. Real actions
+-- only: refresh re-derives the shelves and kicks cover extraction; the
+-- catalog manager is the stock OPDS server UI — the on-device way to set
+-- the server address and credentials.
 function LibraryUI:_showMore()
-    self:_showInfo(_("Library actions are not configured yet."))
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local dialog
+    dialog = ButtonDialog:new{
+        width_factor = 0.6,
+        buttons = {
+            {{
+                text = _("Refresh library"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_refreshLibrary()
+                end,
+            }},
+            {{
+                text = _("Manage catalog"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:_addBooks()
+                end,
+            }},
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function LibraryUI:_refreshLibrary()
+    self:_invalidateLibraryCache()
+    self:_triggerBackgroundExtraction()
+    UIManager:setDirty(self, "ui", self.dimen)
+    local Notification = require("ui/widget/notification")
+    UIManager:show(Notification:new{ text = _("Library refreshed") })
 end
 
 function LibraryUI:_showFiles(path)
@@ -1914,7 +2159,12 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
             TypeScale.category,
             BookTextTokens.title_line_height,
             1)
-        local available = meta_top - self:_px(Space.m) - snippet_y
+        -- the chapter the snippet quotes, as a quiet attribution line;
+        -- reserve its height before sizing the snippet box
+        local chapter = entry and entry.resume_chapter
+        local has_chapter = type(chapter) == "string" and chapter ~= ""
+        local attribution_h = has_chapter and self:_px(20) or 0
+        local available = meta_top - self:_px(Space.m) - snippet_y - attribution_h
         local lines = math.min(3, math.floor(available / line_metrics.line_h))
         if lines >= 1 then
             self:_paintTextBox(bb, "“" .. snippet .. "”", text_x, snippet_y, text_w, {
@@ -1925,6 +2175,15 @@ function LibraryUI:_paintContinueCard(bb, entry, x, y, w, h)
                 height_adjust = true,
                 line_height = BookTextTokens.title_line_height,
             })
+            if has_chapter then
+                self:_paintText(bb, "— " .. chapter,
+                    text_x, snippet_y + lines * line_metrics.line_h + self:_px(4), {
+                        face = FontTokens.sans,
+                        size = TypeScale.card_meta,
+                        color = Blitbuffer.COLOR_DARK_GRAY,
+                        max_width = text_w,
+                    })
+            end
         end
     end
 
@@ -2230,9 +2489,14 @@ function LibraryUI:_paintRecentlyAdded(bb, x, y, w)
 end
 
 function LibraryUI:_paintAllBooks(bb, x, y, w, h)
-    local entries = self:_libraryEntries()
+    local entries = self:_allBooksEntries()
     local count = #entries
-    local count_text = T(N_("%1 item", "%1 items", count), count)
+    local total = #self:_libraryEntries()
+    -- a filtered shelf must never be invisible: the count says so
+    local count_text = count == total
+        and T(N_("%1 item", "%1 items", count), count)
+        or T(_("%1 of %2"), count, total)
+    local sort_label = select(2, self:_librarySortKey())
     local metrics = self:_allBooksRailMetrics()
     local header_x = x + metrics.outer
     local header_w = w - metrics.outer * 2
@@ -2243,7 +2507,7 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
         controls = {
             {
                 label = _("Sort:"),
-                value = _("Recent"),
+                value = sort_label,
                 width = self:_px(112),
             },
         },
@@ -2252,7 +2516,7 @@ function LibraryUI:_paintAllBooks(bb, x, y, w, h)
         w = header_w,
         id = "all_books_header",
         callback = function()
-            self:_showFilter()
+            self:_showSortDialog()
         end,
     })
 

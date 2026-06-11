@@ -78,6 +78,23 @@ function Bookshelf:recordDownload(catalog_id, path)
     self.settings_dirty = false
 end
 
+-- Small persisted UI preferences (sort key, filters): read-through and
+-- eager-flushed like the rest of the plugin settings.
+function Bookshelf:uiPref(key)
+    self:loadSettings()
+    local prefs = self.settings:readSetting("ui_prefs")
+    return prefs and prefs[key]
+end
+
+function Bookshelf:saveUiPref(key, value)
+    self:loadSettings()
+    local prefs = self.settings:readSetting("ui_prefs", {})
+    prefs[key] = value
+    self.settings:saveSetting("ui_prefs", prefs)
+    self.settings:flush()
+    self.settings_dirty = false
+end
+
 -- Reverse lookup for the panel's Remove/Delete split: is this local file
 -- one the plugin downloaded from the catalog? Paths are compared raw and
 -- realpath-normalized — a symlink mismatch must never reclassify a

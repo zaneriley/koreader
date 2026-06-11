@@ -276,6 +276,45 @@ describe("Bookshelf UI module", function()
         assert.equals("Document", text_calls[#text_calls])
     end)
 
+    it("sorts the all-books view by title and author with fallbacks", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local fake = setmetatable({}, { __index = LibraryUI })
+        local entries = {
+            { sort_title = "zebra", sort_authors = "adams" },
+            { text = "Alpha", authors = "Zimmer" }, -- display-field fallback
+            { sort_title = "midway", sort_authors = "" },
+        }
+
+        LibraryUI._applyLibrarySort(fake, entries, "title")
+        assert.equals("Alpha", entries[1].text)
+        assert.equals("midway", entries[2].sort_title)
+        assert.equals("zebra", entries[3].sort_title)
+
+        LibraryUI._applyLibrarySort(fake, entries, "authors")
+        assert.equals("adams", entries[1].sort_authors)
+        assert.equals("Zimmer", entries[2].authors)
+        -- authorless entries sort last
+        assert.equals("", entries[3].sort_authors)
+
+        -- "recent" keeps the given (provider) order untouched
+        local kept = { { sort_title = "b" }, { sort_title = "a" } }
+        LibraryUI._applyLibrarySort(fake, kept, "recent")
+        assert.equals("b", kept[1].sort_title)
+    end)
+
+    it("filters entries by reading status and language tag", function()
+        local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
+        local fake = setmetatable({}, { __index = LibraryUI })
+        local reading_en = { status = "reading", language = "en-US" }
+        local new_ja = { language = "ja" } -- no status means unread
+
+        assert.is_true(LibraryUI._entryMatchesFilter(fake, reading_en, "all", "all"))
+        assert.is_true(LibraryUI._entryMatchesFilter(fake, reading_en, "reading", "en"))
+        assert.is_false(LibraryUI._entryMatchesFilter(fake, reading_en, "new", "all"))
+        assert.is_true(LibraryUI._entryMatchesFilter(fake, new_ja, "new", "ja"))
+        assert.is_false(LibraryUI._entryMatchesFilter(fake, new_ja, "all", "en"))
+    end)
+
     it("card kebabs open the book panel, never the placeholder", function()
         local LibraryUI = dofile("plugins/bookshelf.koplugin/ui.lua")
         local panel_entries = {}
