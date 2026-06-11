@@ -16,6 +16,7 @@ local RenderImage = require("ui/renderimage")
 local UIManager = require("ui/uimanager")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
+local url = require("socket.url")
 local _ = require("gettext")
 local T = require("ffi/util").template
 local Screen = Device.screen
@@ -135,7 +136,9 @@ function DiscoverUI:_discoverEntry(row)
         catalog_id = row.catalog_id,
         thumbnail = row.thumb_href, -- _entryHasCoverArtwork -> white cover fill
     }
-    entry.file = self.plugin and self.plugin:downloadedPath(row.catalog_id) or nil
+    -- legacy key: pre-identity-fix builds keyed downloads by the thumb path
+    local legacy_id = row.thumb_href and (url.parse(row.thumb_href) or {}).path or nil
+    entry.file = self.plugin and self.plugin:resolveDownload(row.catalog_id, legacy_id) or nil
     -- the panel is every card's tap target; _openEntry dispatches callbacks
     -- before files, so no card/open override is needed
     local discover = self

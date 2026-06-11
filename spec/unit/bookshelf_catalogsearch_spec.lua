@@ -192,10 +192,11 @@ describe("Bookshelf catalog search", function()
         assert.is_truthy(hit.author:find("Sheila Heen", 1, true))
         -- relative acquisition href came back absolutized
         assert.equals("http://lib.example/opds/download/306/epub/", hit.epub_href)
-        -- thumbnail surfaced, and the stable catalog id is the URL PATH so
-        -- the download map survives a server host/port change
+        -- thumbnail surfaced as artwork only; the book's identity is the
+        -- ACQUISITION path (a URL path, so it survives host/port changes,
+        -- and stable whether or not the feed carries artwork)
         assert.equals("http://lib.example/opds/cover/306", hit.thumb_href)
-        assert.equals("/opds/cover/306", hit.catalog_id)
+        assert.equals("/opds/download/306/epub/", hit.catalog_id)
         -- basic auth flowed into every request
         for _, req in ipairs(log) do
             assert.equals("rye", req.user)

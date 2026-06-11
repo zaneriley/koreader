@@ -218,13 +218,13 @@ function CatalogSearch:_resultsFromCatalog(catalog, result_url)
             if title == gettext("Unknown") then title = nil end
             local author = item.author
             if author == gettext("Unknown Author") then author = nil end
-            -- thumbnail-first: rails want small images. The href comes back
-            -- absolutized, so the stable book id is the URL PATH — it must
-            -- survive a server host/port change; epub path is the fallback
-            -- key for art-less entries.
+            -- The book's identity is its ACQUISITION path (every result has
+            -- one by construction): a URL path so it survives host/port
+            -- changes, and never the thumbnail's — artwork can appear or
+            -- vanish between fetches without re-keying the book. thumb_href
+            -- is artwork only.
             local thumb = item.thumbnail or item.image
-            local id_href = thumb or epub.href
-            local parsed = id_href and url.parse(id_href)
+            local parsed = url.parse(epub.href)
             table.insert(results, {
                 title = title or item.text,
                 author = author,

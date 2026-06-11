@@ -77,6 +77,23 @@ function Bookshelf:recordDownload(catalog_id, path)
     self.settings_dirty = false
 end
 
+-- Lazy one-time migration: earlier builds keyed downloads by the
+-- thumbnail's URL path when the book had artwork. Resolve by the current
+-- key first, then the legacy one — re-recording a legacy hit under the
+-- current key so the old entry retires.
+function Bookshelf:resolveDownload(catalog_id, legacy_id)
+    local path = self:downloadedPath(catalog_id)
+    if path or not legacy_id or legacy_id == catalog_id then
+        return path
+    end
+    path = self:downloadedPath(legacy_id)
+    if path and catalog_id then
+        self.downloads[legacy_id] = nil
+        self:recordDownload(catalog_id, path)
+    end
+    return path
+end
+
 function Bookshelf:discoverSnapshot()
     self:loadSettings()
     return self.settings:readSetting("discover_snapshot")
