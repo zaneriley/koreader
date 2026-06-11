@@ -45,6 +45,16 @@ describe("Bookshelf catalog search", function()
     <id>/opds/shelf/9</id>
     <link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="/opds/shelf/9"/>
   </entry>
+  <entry>
+    <title>Journal (Private)</title>
+    <id>/opds/shelf/3</id>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="/opds/shelf/3"/>
+  </entry>
+  <entry>
+    <title>Maths (Public) (Public)</title>
+    <id>/opds/shelf/4</id>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog" href="/opds/shelf/4"/>
+  </entry>
 </feed>]]
 
     local ROOT_FEED_WITH_NON_NAV_FIRST_LINK = [[<?xml version="1.0" encoding="UTF-8"?>
@@ -251,7 +261,7 @@ describe("Bookshelf catalog search", function()
         assert.equals("http://lib.example/opds/hot", rails[2].href)
     end)
 
-    it("appends one rail per custom shelf, stripping the visibility marker", function()
+    it("appends one rail per custom shelf, stripping one visibility marker", function()
         local cs = CatalogSearch.new{
             http = fakeHttp({
                 ["http://lib.example/opds"] = ROOT_FEED,
@@ -260,12 +270,28 @@ describe("Bookshelf catalog search", function()
         }
         local rails, err = cs:discoverRails(SERVER)
         assert.is_nil(err)
-        assert.equals(4, #rails)
+        assert.equals(6, #rails)
         assert.equals("shelf:/opds/shelf/8", rails[3].key)
         assert.equals("Learning Japanese", rails[3].title)
         assert.equals("http://lib.example/opds/shelf/8", rails[3].href)
         assert.equals("shelf:/opds/shelf/9", rails[4].key)
         assert.equals("The Hacker's Craft", rails[4].title)
+        -- "(Private)" is never a server marker: the reader's own text stays
+        assert.equals("Journal (Private)", rails[5].title)
+        -- exactly one trailing marker comes off, never two
+        assert.equals("Maths (Public)", rails[6].title)
+    end)
+
+    it("anchors the rail plan new-first regardless of feed order", function()
+        local cs = CatalogSearch.new{}
+        local plan = cs:railPlan({
+            { title = "Hot Books", href = "http://lib.example/opds/hot" },
+            { title = "Shelves", href = "http://lib.example/opds/shelfindex" },
+            { title = "Recently added Books", href = "http://lib.example/opds/new" },
+        })
+        assert.equals("new", plan.rails[1].key)
+        assert.equals("hot", plan.rails[2].key)
+        assert.equals("http://lib.example/opds/shelfindex", plan.shelf_index.href)
     end)
 
     it("degrades to the anchor rails when the shelf index is unreachable", function()

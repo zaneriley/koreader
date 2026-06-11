@@ -260,21 +260,16 @@ CatalogSearch.RAIL_PATHS = {
 -- same href-path way.
 CatalogSearch.SHELF_INDEX_PATH = "/shelfindex/?$"
 
--- Returns the ordered rail plan for the Discover surface: the two anchor
--- sections first (new, hot), then one rail per custom shelf in catalog
--- order. Each rail is { key, title, href }; shelf keys embed the shelf's
--- href path so they stay stable across hosts. Shelf discovery is best
--- effort: a catalog without shelves (or a failing shelf index) still
--- yields the anchor rails.
-function CatalogSearch:discoverRails(server)
-    local sections, err = self:sections(server)
-    if not sections then
-        return nil, err
-    end
+-- Pure selection over an already-fetched sections list: the anchor rails
+-- (new first, then hot) and the shelf-index section when the catalog has
+-- one. The Discover surface drives its fetches one per UI pass and calls
+-- this between them; discoverRails composes the whole plan for callers
+-- that can afford both fetches at once.
+function CatalogSearch:railPlan(sections)
     local url = self:_dep("url")
     local anchors = {}
     local shelf_index
-    for _i, section in ipairs(sections) do
+    for _i, section in ipairs(sections or {}) do
         local parsed = url.parse(section.href) or {}
         local path = parsed.path or ""
         for key, pattern in pairs(self.RAIL_PATHS) do
@@ -296,15 +291,36 @@ function CatalogSearch:discoverRails(server)
             table.insert(rails, { key = key, title = section.title, href = section.href })
         end
     end
-    for _i, shelf in ipairs(self:shelves(server, shelf_index)) do
+    return { rails = rails, shelf_index = shelf_index }
+end
+
+-- Returns the ordered rail plan for the Discover surface: the two anchor
+-- sections first (new, hot), then one rail per custom shelf in catalog
+-- order. Each rail is { key, title, href }; shelf keys embed the shelf's
+-- href path so they stay stable across hosts. Shelf discovery is best
+-- effort: a catalog without shelves (or a failing shelf index) still
+-- yields the anchor rails.
+function CatalogSearch:discoverRails(server)
+    local sections, err = self:sections(server)
+    if not sections then
+        return nil, err
+    end
+    local plan, plan_err = self:railPlan(sections)
+    if not plan then
+        return nil, plan_err
+    end
+    local rails = plan.rails
+    for _i, shelf in ipairs(self:shelves(server, plan.shelf_index)) do
         table.insert(rails, shelf)
     end
     return rails
 end
 
--- Lists the catalog's custom shelves from its shelf index feed. calibre-web
--- decorates shelf titles with a visibility marker ("Name (Public)"); that is
--- server metadata, not the shelf's name, so it is stripped for display.
+-- Lists the catalog's custom shelves from its shelf index feed.
+-- calibre-web decorates public shelf titles with a "(Public)" marker —
+-- server metadata, not the shelf's name, so one trailing marker is
+-- stripped. The marker is gettext-localized server-side, so this only
+-- covers English-locale servers; other locales keep it (cosmetic only).
 function CatalogSearch:shelves(server, shelf_index_section)
     if not shelf_index_section then
         return {}
@@ -318,7 +334,7 @@ function CatalogSearch:shelves(server, shelf_index_section)
     for _i, item in ipairs(self:_itemsFromCatalog(catalog, shelf_index_section.href) or {}) do
         local title = item.text or item.title
         if item.url and type(title) == "string" then
-            title = title:gsub("%s*%(Public%)%s*$", ""):gsub("%s*%(Private%)%s*$", "")
+            title = title:gsub("%s*%(Public%)%s*$", "")
             if title ~= "" then
                 local path = (url.parse(item.url) or {}).path or item.url
                 table.insert(shelves, {

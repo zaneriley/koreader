@@ -83,6 +83,37 @@ describe("Bookshelf discover", function()
         assert.equals("hot", rails[2].key)
     end)
 
+    it("resolves rail rows with carry-forward on failed fetches", function()
+        local fake = setmetatable({}, { __index = DiscoverUI })
+        local standing = {
+            ["shelf:/opds/shelf/8"] = { { title = "kept" } },
+            new = { { title = "old new" } },
+        }
+
+        -- fetch failed (nil): the standing snapshot's rows survive
+        local carried = DiscoverUI._resolveRailRows(fake,
+            { key = "shelf:/opds/shelf/8" }, nil, standing)
+        assert.equals("kept", carried[1].title)
+        assert.equals("old new",
+            DiscoverUI._resolveRailRows(fake, { key = "new" }, nil, standing)[1].title)
+
+        -- failed anchor with nothing standing keeps its skeleton
+        assert.same({}, DiscoverUI._resolveRailRows(fake, { key = "hot" }, nil, standing))
+        -- failed shelf with nothing standing is dropped
+        assert.is_nil(DiscoverUI._resolveRailRows(fake,
+            { key = "shelf:/opds/shelf/9" }, nil, standing))
+        -- a successful empty fetch is a real "shelf emptied" and drops it
+        assert.is_nil(DiscoverUI._resolveRailRows(fake,
+            { key = "shelf:/opds/shelf/8" }, {}, standing))
+
+        -- persisted rows are capped
+        local many = {}
+        for i = 1, 40 do
+            many[i] = { title = "b" .. i }
+        end
+        assert.equals(24, #DiscoverUI._resolveRailRows(fake, { key = "new" }, many, standing))
+    end)
+
     it("seeds the anchor skeleton when no snapshot exists", function()
         local fake = setmetatable({}, { __index = DiscoverUI })
         local rails = DiscoverUI._railsFromSnapshot(fake, nil)

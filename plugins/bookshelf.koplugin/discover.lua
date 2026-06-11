@@ -32,6 +32,22 @@ local RailStackTokens = {
     indicator_gap = 10,
 }
 
+-- Positive delay between refresh steps. Load-bearing: UIManager's input
+-- loop drains every already-due task before polling input, so a zero
+-- delay (nextTick) would run the whole fetch chain back-to-back with
+-- taps and repaints starved until it ends. A real delay puts one fetch
+-- per loop pass, with paint + input between. (Same shape as the thumb
+-- drain below.)
+local REFRESH_STEP_DELAY = 0.1
+
+-- Bounds for what a refresh persists: the settings file is rewritten on
+-- every successful refresh and the chain costs one fetch per rail, so
+-- both scale with the server's shelf count unless capped.
+local SnapshotLimits = {
+    max_shelf_rails = 12,
+    max_rows_per_rail = 24, -- ~3 carousel pages per rail
+}
+
 local DiscoverUI = LibraryUI:extend{
     title = _("Discover"),
     covers_fullscreen = true, -- repaints start here, never walk the home beneath
@@ -171,7 +187,11 @@ function DiscoverUI:paintTo(bb, x, y)
     local nav_y = y + h - nav_h
     local rail_pitch = self:_railPitch(w)
     local indicator_h = self:_px(RailStackTokens.indicator_band)
-    local stack_h = math.max(rail_pitch, nav_y - cursor_y - indicator_h)
+    local avail = nav_y - cursor_y - indicator_h
+    -- a viewport too short for one rail still paints that rail, but the
+    -- pager would overlap it: skip the squares, swipes still page
+    local indicator_fits = avail >= rail_pitch
+    local stack_h = math.max(rail_pitch, avail)
     local per_page = math.max(1, math.floor(stack_h / rail_pitch))
     local window = GridLayout.pageWindow(#rails, per_page, self._rail_stack_page, per_page)
     self._rail_stack_page = window.page
@@ -181,7 +201,9 @@ function DiscoverUI:paintTo(bb, x, y)
         cursor_y = self:_paintDiscoverRail(bb, "discover_" .. rail.key,
             rail.label, rail.entries, x, cursor_y, w, margin)
     end
-    self:_paintRailStackIndicator(bb, x, w, nav_y - indicator_h, window.page, window.max_page)
+    if indicator_fits then
+        self:_paintRailStackIndicator(bb, x, w, nav_y - indicator_h, window.page, window.max_page)
+    end
 
     self:_paintBottomNav(bb, x, nav_y, w, nav_h)
     self:_drainThumbQueue() -- kick fills for thumbs this paint missed
@@ -433,54 +455,114 @@ function DiscoverUI:_fillThumb(job)
 end
 
 function DiscoverUI:_scheduleRailRefresh()
-    UIManager:nextTick(function()
-        if self._closed or not self._server or self._refreshing then
-            return
-        end
-        if not NetworkMgr:isConnected() then
+    if self._refreshing then
+        return
+    end
+    self._refreshing = true
+    self:_scheduleNextRefreshStep({ phase = "plan" })
+end
+
+function DiscoverUI:_scheduleNextRefreshStep(state)
+    UIManager:scheduleIn(REFRESH_STEP_DELAY, function()
+        self:_refreshStep(state)
+    end)
+end
+
+-- One network fetch per scheduled step, so each loop pass stays bounded
+-- by a single time-capped request: plan (root feed) -> shelves (shelf
+-- index) -> one step per rail feed.
+function DiscoverUI:_refreshStep(state)
+    if self._closed then
+        self._refreshing = false
+        return
+    end
+    if state.phase == "plan" then
+        if not self._server or not NetworkMgr:isConnected() then
+            self._refreshing = false
             return -- offline mode: the snapshot stands
         end
         -- re-resolve in case the user edited OPDS settings since open
         self._server = self.catalog_search:getServer() or self._server
-        local plan, err = self.catalog_search:discoverRails(self._server)
-        if self._closed or not plan then
-            if err then
-                logger.dbg("Bookshelf discover refresh failed:", err)
-            end
+        local sections, err = self.catalog_search:sections(self._server)
+        local plan = sections and self.catalog_search:railPlan(sections)
+        if not plan then
+            logger.dbg("Bookshelf discover refresh failed:", err or "no rail plan")
+            self._refreshing = false
             return
         end
-        -- One rail fetch per UI tick: every fetch is time-bounded, and the
-        -- gaps between ticks keep taps and swipes responsive while a long
-        -- shelf list (anchors + one feed per shelf) fills in.
-        self._refreshing = true
-        local snapshot = {
+        state.plan = plan.rails
+        state.shelf_index = plan.shelf_index
+        state.standing = self:_standingRows()
+        state.snapshot = {
             fetched_at = os.time(),
             server_url = self._server.url,
             rails = {},
         }
-        local index = 0
-        local step
-        step = function()
-            if self._closed then
-                self._refreshing = false
-                return
-            end
-            index = index + 1
-            local rail = plan[index]
-            if not rail then
-                self:_finishRailRefresh(snapshot)
-                return
-            end
-            local rows = self.catalog_search:rail(self._server, rail.href)
-            -- anchors always land (even empty: their placeholder is the
-            -- surface skeleton); shelf rails only when they have books
-            if rows and (#rows > 0 or rail.key == "new" or rail.key == "hot") then
-                table.insert(snapshot.rails, { key = rail.key, title = rail.title, rows = rows })
-            end
-            UIManager:nextTick(step)
+        state.index = 0
+        state.phase = state.shelf_index and "shelves" or "rails"
+    elseif state.phase == "shelves" then
+        local shelves = self.catalog_search:shelves(self._server, state.shelf_index)
+        for _i = 1, math.min(#shelves, SnapshotLimits.max_shelf_rails) do
+            table.insert(state.plan, shelves[_i])
         end
-        step()
-    end)
+        if #shelves > SnapshotLimits.max_shelf_rails then
+            logger.dbg("Bookshelf discover: dropped",
+                #shelves - SnapshotLimits.max_shelf_rails, "shelf rails beyond the cap")
+        end
+        state.phase = "rails"
+    else
+        state.index = state.index + 1
+        local rail = state.plan[state.index]
+        if not rail then
+            self:_finishRailRefresh(state.snapshot)
+            return
+        end
+        local rows = self:_resolveRailRows(rail,
+            self.catalog_search:rail(self._server, rail.href), state.standing)
+        if rows then
+            table.insert(state.snapshot.rails, { key = rail.key, title = rail.title, rows = rows })
+        end
+    end
+    self:_scheduleNextRefreshStep(state)
+end
+
+-- What a rail contributes to the fresh snapshot: its fetched rows; the
+-- standing snapshot's rows when the fetch FAILED (a transient timeout
+-- must never erase cached rails or their disk thumbnails); an empty
+-- anchor as the surface skeleton; nil to drop the rail. A successful
+-- empty fetch ({}) on a shelf is a real "shelf emptied" and drops it.
+function DiscoverUI:_resolveRailRows(rail, rows, standing)
+    local anchor = rail.key == "new" or rail.key == "hot"
+    if not rows then
+        rows = standing[rail.key]
+        if not rows and anchor then
+            rows = {}
+        end
+    end
+    if not rows or (#rows == 0 and not anchor) then
+        return nil
+    end
+    if #rows > SnapshotLimits.max_rows_per_rail then
+        local capped = {}
+        for _i = 1, SnapshotLimits.max_rows_per_rail do
+            capped[_i] = rows[_i]
+        end
+        return capped
+    end
+    return rows
+end
+
+-- The persisted snapshot's rows indexed by rail key, for carry-forward.
+-- A pre-shelf map snapshot has no array part and yields nothing: cache miss.
+function DiscoverUI:_standingRows()
+    local standing = {}
+    local snapshot = self.plugin and self.plugin:discoverSnapshot()
+    for _i, rail in ipairs(snapshot and snapshot.rails or {}) do
+        if rail.key then
+            standing[rail.key] = rail.rows
+        end
+    end
+    return standing
 end
 
 function DiscoverUI:_finishRailRefresh(snapshot)
