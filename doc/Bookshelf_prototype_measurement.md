@@ -20,7 +20,7 @@ Use these scenario names exactly:
 
 | Scenario | Start | Stop |
 |---|---|---|
-| `default_bookshelf_launch` | KOReader is launched without a file or directory argument | Bookshelf Home is the first app surface, after any upstream one-time notices are dismissed |
+| `default_bookshelf_launch` | KOReader is launched without a file or directory argument and Library is the configured home view (`start_with=library` or `home_view=library`) | Bookshelf Home is the first app surface, after any upstream one-time notices are dismissed |
 | `reader_home_bookshelf_return` | Home action is invoked from an open document | The document is closed and Bookshelf Home is visible |
 | `enter_home_bookshelf` | Home/Library launch, or Home action from another view | My Library content is visible and the view accepts input |
 | `downloaded_books_cached_load` | Library requests cached book rows for the visible page | Cached book data returns to the caller |
@@ -35,6 +35,10 @@ Use these scenario names exactly:
 Keep the same start and stop point for all iterations in a run. Use `notes` for
 anything that may explain variance, such as first run after reboot, OPDS server
 disabled, or dictionaries missing.
+
+Scenarios that end on Bookshelf Home assume Library is the configured home
+view. The stock launch default remains the file manager; the Library home is
+an opt-in setting, not a changed default.
 
 ## Recording Timings
 
@@ -110,7 +114,7 @@ tester in the evidence notes before starting.
 
 | State | Setup | Check |
 |---|---|---|
-| Empty | Library has zero books | Empty library state is legible, centered/aligned, and has one clear Add Books path |
+| Empty | Library has zero books | Empty library state is legible, centered/aligned, and has one clear path to Discover |
 | Single book | Library has one book with normal metadata and cover | Continue, Recently added, and All books are positioned intentionally without odd empty-row artifacts |
 | Normal | Library has enough books to fill more than one page | Rows, page transitions, selection, and thumbnails remain stable across navigation |
 | Grid rhythm | Inspect Library, Continue, Recently added, All books, and bottom navigation | Header actions, chevrons, counts, sort/view controls, covers, labels, and bottom nav share a visible grid and baseline rhythm |
@@ -119,11 +123,11 @@ tester in the evidence notes before starting.
 | Long title | Add a book with a very long title and author | Title truncates or wraps without overlapping cover, metadata, or adjacent items |
 | Japanese title | Add a book with Japanese title and author metadata | Glyphs render, line breaks are acceptable, and fallback fonts do not change row height unexpectedly |
 | No cover | Add a supported book with missing/invalid cover art | Placeholder is visible, sized like covers, and resolves without repeated redraw flicker |
-| OPDS down | Configure an OPDS catalog URL that refuses or times out | Add Books reports an actionable error and returns cleanly to Library |
-| Wi-Fi off | Disable Wi-Fi before opening Add Books | Offline state is clear, no spinner is left running, and local Library remains usable |
+| OPDS down | Configure an OPDS catalog URL that refuses or times out | Discover paints the last cached rails with an "as of" timestamp; library search's catalog section degrades without blocking device results; Library stays usable |
+| Wi-Fi off | Disable Wi-Fi before opening Discover | Offline is a mode: the cached rails paint with the staleness whisper, no spinner is left running, and local Library remains usable |
 | Dictionary ready | Install at least one dictionary | Dictionary action is visible and lookup opens after Library navigation |
 | Dictionary missing | Remove or disable dictionaries | Missing-dictionary state is clear and lookup reports an actionable unavailable state |
-| Default launch | Start KOReader without file/directory arguments | Bookshelf Home appears by default; the folder browser is not the first normal surface |
+| Configured-home launch | Start KOReader without file/directory arguments and Library set as the home view | Bookshelf Home appears; with no home setting, the stock file manager remains the default |
 | Reader Home | Open a book, then invoke Home | Reader closes to Bookshelf Home, not the folder browser |
 | Files escape hatch | Tap Files from Bookshelf | Existing KOReader file manager opens only as an explicit secondary path |
 | Ghosting/refresh | Page through several shelf pages on the device | Text and thumbnails do not leave distracting residue after expected refresh behavior |
@@ -193,6 +197,26 @@ Observed on 2026-05-05:
 - Launching the noVNC container with `KO_HOME=/kobuild/install/koreader`
   produced a clean startup screenshot of Bookshelf at
   `.tmp/bookshelf-visual-pass/startup-home-install-ko-home.png`.
+
+Observed on 2026-06-11:
+
+- The Discover surface replaced Add Books: two anchor rails (New in your
+  library, Popular at home) plus one rail per custom catalog shelf, painted
+  from a persisted snapshot and refreshed in the background. The rail stack
+  pages vertically with a square pager above the nav.
+- The refresh chain runs exactly one network fetch per scheduled UI pass with
+  a positive inter-step delay; a zero-delay (nextTick) chain starves input
+  because UIManager drains every due task before polling. Verified in the
+  emulator: vertical swipes page the stack while the chain is mid-fetch.
+- A rail fetch failure carries the standing snapshot's rows forward instead
+  of erasing them; a successful empty fetch on a shelf drops the rail.
+  Persisted snapshots are bounded (12 shelf rails, 24 rows per rail).
+- Pre-shelf map-shaped snapshots are treated as cache misses: the anchor
+  skeleton paints and the first online refresh rewrites the array shape.
+- Catalog book identity is the acquisition URL path; thumbnails are artwork
+  only. Legacy thumb-path download-map keys migrate lazily on first resolve,
+  verified live with an on-device mark surviving the re-key.
+- Suite state at `b6c8a7264`: 111 bookshelf spec successes, luacheck clean.
 
 ## Sample Library Corpus
 
